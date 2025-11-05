@@ -326,11 +326,20 @@ exports.getProviderRequests = async (req, res) => {
     }
 };
 
-// Update request status (provider actions - accept/complete/cancel)
+// Enhanced update request status (provider actions - accept/complete/cancel)
+// Enhanced update request status (provider actions - accept/complete/cancel)
 exports.updateRequestStatus = async (req, res) => {
     try {
         const { requestId } = req.params;
-        const { status, providerNotes, cancellationReason } = req.body;
+        const { status } = req.body;
+
+        // Validate required fields
+        if (!status) {
+            return res.status(400).json({
+                success: false,
+                message: 'Status is required'
+            });
+        }
 
         const serviceRequest = await ServiceRequest.findById(requestId);
         
@@ -349,7 +358,22 @@ exports.updateRequestStatus = async (req, res) => {
             });
         }
 
-        // Validate status transition
+        // Validate current status
+        if (serviceRequest.status === 'completed') {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot update a completed request'
+            });
+        }
+
+        if (serviceRequest.status === 'cancelled') {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot update a cancelled request'
+            });
+        }
+
+        // Enhanced status transition validation
         const validTransitions = {
             pending: ['accepted', 'cancelled'],
             accepted: ['completed', 'cancelled'],
@@ -360,42 +384,71 @@ exports.updateRequestStatus = async (req, res) => {
         if (!validTransitions[serviceRequest.status].includes(status)) {
             return res.status(400).json({
                 success: false,
-                message: `Invalid status transition from ${serviceRequest.status} to ${status}`
+                message: `Cannot change status from ${serviceRequest.status} to ${status}`
             });
         }
 
-        // Update request
+        // Store previous status for response
+        const previousStatus = serviceRequest.status;
+
+        // Update request - only status is required
         serviceRequest.status = status;
-        if (providerNotes) serviceRequest.providerNotes = providerNotes;
         
+        // Set cancelledBy if status is cancelled
         if (status === 'cancelled') {
             serviceRequest.cancelledBy = 'provider';
-            serviceRequest.cancellationReason = cancellationReason;
+            // Note: cancellationReason is now optional
         }
 
         await serviceRequest.save();
 
+        // Populate the request for response
         await serviceRequest.populate('customer', 'firstName lastName email phone profileImage');
+        await serviceRequest.populate('provider', 'firstName lastName businessNameRegistered profileImage businessLogo phone rating');
+
+        // Prepare response message
+        let message = `Service request ${status} successfully`;
+        if (status === 'accepted') {
+            message = 'Service request accepted successfully';
+        } else if (status === 'completed') {
+            message = 'Service marked as completed successfully';
+        } else if (status === 'cancelled') {
+            message = 'Service request cancelled successfully';
+        }
 
         res.json({
             success: true,
-            message: `Service request ${status} successfully`,
+            message,
             data: { 
                 serviceRequest: {
                     _id: serviceRequest._id,
                     serviceType: serviceRequest.serviceType,
                     problem: serviceRequest.problem,
                     status: serviceRequest.status,
-                    providerNotes: serviceRequest.providerNotes
+                    previousStatus,
+                    scheduledDate: serviceRequest.scheduledDate,
+                    customer: serviceRequest.customer,
+                    provider: serviceRequest.provider,
+                    updatedAt: serviceRequest.updatedAt
                 }
             }
         });
 
     } catch (error) {
         console.error('Update request status error:', error);
+        
+        if (error.name === 'ValidationError') {
+            const errors = Object.values(error.errors).map(err => err.message);
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors
+            });
+        }
+
         res.status(500).json({
             success: false,
-            message: 'Failed to update service request',
+            message: 'Failed to update service request status',
             error: error.message
         });
     }
@@ -563,6 +616,127 @@ exports.getProvidersByService = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Failed to fetch providers',
+            error: error.message
+        });
+    }
+};
+
+// Get provider's requests with status filter
+exports.getProviderRequestsByStatus = async (req, res) => {
+    try {
+        const { status } = req.params;
+        const { page = 1, limit = 10 } = req.query;
+        const skip = (page - 1) * limit;
+
+        // Validate status
+        const validStatuses = ['pending', 'accepted', 'completed', 'cancelled'];
+        if (status && !validStatuses.includes(status)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid status. Use: pending, accepted, completed, or cancelled'
+            });
+        }
+
+        const filter = { provider: req.user._id };
+        if (status) filter.status = status;
+
+        const serviceRequests = await ServiceRequest.find(filter)
+            .populate('customer', 'firstName lastName email phone profileImage address')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit));
+
+        const total = await ServiceRequest.countDocuments(filter);
+
+        res.json({
+            success: true,
+            data: {
+                serviceRequests,
+                pagination: {
+                    current: parseInt(page),
+                    total,
+                    pages: Math.ceil(total / limit)
+                },
+                status: status || 'all'
+            }
+        });
+
+    } catch (error) {
+        console.error('Get provider requests by status error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch service requests',
+            error: error.message
+        });
+    }
+};
+
+// Get provider dashboard stats
+exports.getProviderDashboardStats = async (req, res) => {
+    try {
+        const providerId = req.user._id;
+
+        const stats = await ServiceRequest.aggregate([
+            { $match: { provider: providerId } },
+            {
+                $group: {
+                    _id: '$status',
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // Format stats
+        const statusCounts = {
+            pending: 0,
+            accepted: 0,
+            completed: 0,
+            cancelled: 0,
+            total: 0
+        };
+
+        stats.forEach(stat => {
+            statusCounts[stat._id] = stat.count;
+            statusCounts.total += stat.count;
+        });
+
+        // Get today's requests
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const todaysRequests = await ServiceRequest.countDocuments({
+            provider: providerId,
+            scheduledDate: { $gte: today }
+        });
+
+        // Get recent pending requests
+        const recentPendingRequests = await ServiceRequest.find({
+            provider: providerId,
+            status: 'pending'
+        })
+        .populate('customer', 'firstName lastName')
+        .sort({ createdAt: -1 })
+        .limit(5);
+
+        res.json({
+            success: true,
+            data: {
+                statusCounts,
+                todaysRequests,
+                recentPendingRequests,
+                provider: {
+                    id: req.user._id,
+                    name: `${req.user.firstName} ${req.user.lastName}`,
+                    businessName: req.user.businessNameRegistered
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Get provider dashboard stats error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch dashboard stats',
             error: error.message
         });
     }

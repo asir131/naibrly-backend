@@ -62,7 +62,12 @@ const serviceRequestSchema = new mongoose.Schema({
             type: Date,
             default: Date.now
         },
-        note: String
+        note: String,
+        changedBy: {
+            type: String,
+            enum: ['customer', 'provider', 'system'],
+            default: 'system'
+        }
     }],
     price: {
         type: Number,
@@ -92,19 +97,45 @@ const serviceRequestSchema = new mongoose.Schema({
         type: String,
         enum: ['customer', 'provider']
     },
-    cancellationReason: String
+    cancellationReason: String,
+    completedAt: {
+        type: Date
+    }
 }, {
     timestamps: true
 });
 
+// Enhanced pre-save middleware for status tracking
 serviceRequestSchema.pre('save', function(next) {
     if (this.isModified('status')) {
+        let note = '';
+        let changedBy = 'system';
+        
+        if (this.status === 'cancelled') {
+            note = this.cancellationReason || 'No reason provided';
+            changedBy = this.cancelledBy || 'system';
+        } else if (this.status === 'completed') {
+            note = 'Service completed by provider';
+            changedBy = 'provider';
+            this.completedAt = new Date();
+        } else if (this.status === 'accepted') {
+            note = 'Service accepted by provider';
+            changedBy = 'provider';
+        }
+        
         this.statusHistory.push({
             status: this.status,
-            note: this.status === 'cancelled' ? this.cancellationReason : ''
+            note: note,
+            changedBy: changedBy,
+            timestamp: new Date()
         });
     }
     next();
 });
+
+// Index for better performance
+serviceRequestSchema.index({ provider: 1, status: 1 });
+serviceRequestSchema.index({ customer: 1, status: 1 });
+serviceRequestSchema.index({ scheduledDate: 1 });
 
 module.exports = mongoose.model('ServiceRequest', serviceRequestSchema);

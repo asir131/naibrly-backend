@@ -7,7 +7,9 @@ const {
     cancelRequest,
     addReview,
     getProvidersByService,
-    testProviderServices
+    testProviderServices,
+    getProviderRequestsByStatus,
+    getProviderDashboardStats
 } = require('../controllers/serviceRequestController');
 const { auth } = require('../middleware/auth');
 
@@ -22,8 +24,10 @@ router.get('/customer/my-requests', auth, getCustomerRequests);
 router.patch('/:requestId/cancel', auth, cancelRequest);
 router.post('/:requestId/review', auth, addReview);
 
-// Provider routes
+// Provider routes - Enhanced status management
 router.get('/provider/my-requests', auth, getProviderRequests);
+router.get('/provider/status/:status', auth, getProviderRequestsByStatus);
+router.get('/provider/stats', auth, getProviderDashboardStats);
 router.patch('/:requestId/status', auth, updateRequestStatus);
 
 // Public routes (for browsing providers)
