@@ -80,13 +80,7 @@ try {
   console.error('Error loading user routes:', error.message);
 }
 
-try {
-  registrationRoutes = require('./routes/registration');
-  app.use('/api/registration', registrationRoutes);
-  console.log('Registration routes loaded successfully');
-} catch (error) {
-  console.error('Error loading registration routes:', error.message);
-}
+
 
 // // Create SuperAdmin function
 // const createSuperAdmin = async () => {
@@ -136,9 +130,9 @@ app.use((err, req, res, next) => {
 });
 
 // 404 handler
-// app.use('*', (req, res) => {
-//   res.status(404).json({ message: 'Route not found' });
-// });
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Route not found' });
+});
 
 // Export app and server WITHOUT starting the server
 module.exports = { app, server };

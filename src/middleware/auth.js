@@ -57,4 +57,5 @@ const authorize = (...roles) => {
     };
 };
 
+// Make sure you're exporting correctly
 module.exports = { auth, authorize };

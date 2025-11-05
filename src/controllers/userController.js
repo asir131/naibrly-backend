@@ -25,7 +25,7 @@ exports.getUserProfile = async (req, res) => {
 
         // If user is a provider, include provider details
         if (req.user.role === 'provider') {
-            const providerProfile = await ServiceProvider.findOne({ user: req.user._id });
+            const providerProfile = await ServiceProvider.findOne({ _id: req.user._id });
             profileData.providerProfile = providerProfile;
         }
 

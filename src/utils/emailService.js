@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 
 // Create transporter - FIXED: createTransport instead of createTransporter
-const createTransporter = () => {
+const createTransport = () => {
     return nodemailer.createTransport({
         service: process.env.EMAIL_SERVICE || 'gmail',
         host: process.env.EMAIL_HOST || 'smtp.gmail.com',

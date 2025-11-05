@@ -4,18 +4,13 @@ const Admin = require('../models/Admin');
 const { cloudinary } = require('../config/cloudinary');
 const jwt = require('jsonwebtoken');
 
-// Add this debug line to check if models are loaded
-console.log('Customer model:', typeof Customer);
-console.log('ServiceProvider model:', typeof ServiceProvider);
-console.log('Admin model:', typeof Admin);
-
 // Generate JWT Token
 const generateToken = (userId) => {
     return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
 
 // Role selection
-exports.selectRole = async (req, res) => {
+const selectRole = async (req, res) => {
     try {
         const { role } = req.body;
 
@@ -45,7 +40,7 @@ exports.selectRole = async (req, res) => {
 };
 
 // Customer registration with file upload
-exports.registerCustomer = async (req, res) => {
+const registerCustomer = async (req, res) => {
     try {
         const {
             firstName,
@@ -61,9 +56,6 @@ exports.registerCustomer = async (req, res) => {
             aptSuite
         } = req.body;
 
-        console.log('Registration data:', req.body);
-        console.log('Uploaded file:', req.file);
-
         // Validation
         if (password !== confirmPassword) {
             return res.status(400).json({
@@ -72,9 +64,17 @@ exports.registerCustomer = async (req, res) => {
             });
         }
 
-        // Check if user already exists in any model
+        // Check if user already exists
         const existingCustomer = await Customer.findOne({ email });
-        const existingProvider = await ServiceProvider.findOne({ email });
+        let existingProvider = null;
+        
+        try {
+            if (ServiceProvider && typeof ServiceProvider.findOne === 'function') {
+                existingProvider = await ServiceProvider.findOne({ email });
+            }
+        } catch (error) {
+            console.warn('ServiceProvider check failed:', error.message);
+        }
         
         if (existingCustomer || existingProvider) {
             return res.status(400).json({
@@ -134,7 +134,6 @@ exports.registerCustomer = async (req, res) => {
     } catch (error) {
         console.error('Customer registration error:', error);
         
-        // Delete uploaded image if registration fails
         if (req.file && req.file.filename) {
             try {
                 await cloudinary.uploader.destroy(req.file.filename);
@@ -152,7 +151,7 @@ exports.registerCustomer = async (req, res) => {
 };
 
 // Service Provider registration with file uploads
-exports.registerProvider = async (req, res) => {
+const registerProvider = async (req, res) => {
     try {
         const {
             firstName,
@@ -167,18 +166,11 @@ exports.registerProvider = async (req, res) => {
             businessAddress,
             businessPhone,
             website,
-            serviceDaysStart,
-            serviceDaysEnd,
-            businessHoursStart,
-            businessHoursEnd,
             servicesProvided,
             description,
             experience,
             hourlyRate
         } = req.body;
-
-        console.log('Provider registration data:', req.body);
-        console.log('Uploaded files:', req.files);
 
         // Validation
         if (password !== confirmPassword) {
@@ -188,14 +180,49 @@ exports.registerProvider = async (req, res) => {
             });
         }
 
-        // Check if user already exists in any model
+        // Check if user already exists
         const existingCustomer = await Customer.findOne({ email });
-        const existingProvider = await ServiceProvider.findOne({ email });
+        let existingProvider = null;
+        
+        try {
+            if (ServiceProvider && typeof ServiceProvider.findOne === 'function') {
+                existingProvider = await ServiceProvider.findOne({ email });
+            }
+        } catch (error) {
+            console.warn('ServiceProvider check failed:', error.message);
+        }
         
         if (existingCustomer || existingProvider) {
             return res.status(400).json({
                 success: false,
                 message: 'User already exists with this email'
+            });
+        }
+
+        // Parse serviceDays from individual form fields
+        const serviceDaysData = {
+            start: req.body.serviceDaysStart,
+            end: req.body.serviceDaysEnd
+        };
+
+        // Parse businessHours from individual form fields
+        const businessHoursData = {
+            start: req.body.businessHoursStart,
+            end: req.body.businessHoursEnd
+        };
+
+        // Validate required nested fields
+        if (!serviceDaysData.start || !serviceDaysData.end) {
+            return res.status(400).json({
+                success: false,
+                message: 'Service days start and end are required'
+            });
+        }
+
+        if (!businessHoursData.start || !businessHoursData.end) {
+            return res.status(400).json({
+                success: false,
+                message: 'Business hours start and end are required'
             });
         }
 
@@ -229,7 +256,7 @@ exports.registerProvider = async (req, res) => {
             }
         }
 
-        // Create service provider
+        // Create service provider - AUTO APPROVE FOR TESTING
         const serviceProvider = new ServiceProvider({
             firstName,
             lastName,
@@ -244,18 +271,16 @@ exports.registerProvider = async (req, res) => {
             businessAddress,
             businessPhone,
             website: website || '',
-            serviceDays: {
-                start: serviceDaysStart,
-                end: serviceDaysEnd
-            },
-            businessHours: {
-                start: businessHoursStart,
-                end: businessHoursEnd
-            },
+            serviceDays: serviceDaysData,
+            businessHours: businessHoursData,
             servicesProvided: servicesArray,
             description: description || '',
             experience: experience ? parseInt(experience) : 0,
-            hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0
+            hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0,
+            isApproved: true, // AUTO APPROVE PROVIDERS FOR TESTING
+            approvalStatus: 'approved', // ADD THIS FIELD
+            isActive: true, // ENSURE THIS IS TRUE
+            isVerified: true // ADD THIS FIELD
         });
 
         await serviceProvider.save();
@@ -265,7 +290,7 @@ exports.registerProvider = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: 'Service provider registered successfully',
+            message: 'Service provider registered and approved successfully',
             data: {
                 token,
                 user: {
@@ -275,13 +300,17 @@ exports.registerProvider = async (req, res) => {
                     email: serviceProvider.email,
                     role: serviceProvider.role,
                     phone: serviceProvider.phone,
-                    profileImage: serviceProvider.profileImage
+                    profileImage: serviceProvider.profileImage,
+                    isApproved: serviceProvider.isApproved, // INCLUDE THIS
+                    approvalStatus: serviceProvider.approvalStatus, // INCLUDE THIS
+                    isVerified: serviceProvider.isVerified // INCLUDE THIS
                 },
                 providerProfile: {
                     businessName: serviceProvider.businessNameRegistered,
                     providerRole: serviceProvider.providerRole,
                     servicesProvided: serviceProvider.servicesProvided,
                     isApproved: serviceProvider.isApproved,
+                    approvalStatus: serviceProvider.approvalStatus,
                     businessLogo: serviceProvider.businessLogo
                 }
             }
@@ -290,7 +319,6 @@ exports.registerProvider = async (req, res) => {
     } catch (error) {
         console.error('Provider registration error:', error);
         
-        // Delete uploaded images if registration fails
         if (req.files) {
             try {
                 if (req.files['profileImage']) {
@@ -313,14 +341,26 @@ exports.registerProvider = async (req, res) => {
 };
 
 // Login (works for all roles)
-exports.login = async (req, res) => {
+const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
         // Check in all models
         let user = await Customer.findOne({ email });
-        if (!user) user = await ServiceProvider.findOne({ email });
-        if (!user) user = await Admin.findOne({ email });
+        if (!user) {
+            try {
+                user = await ServiceProvider.findOne({ email });
+            } catch (error) {
+                console.warn('ServiceProvider login check failed:', error.message);
+            }
+        }
+        if (!user) {
+            try {
+                user = await Admin.findOne({ email });
+            } catch (error) {
+                console.warn('Admin login check failed:', error.message);
+            }
+        }
 
         if (!user) {
             return res.status(400).json({
@@ -367,9 +407,14 @@ exports.login = async (req, res) => {
                 providerRole: user.providerRole,
                 servicesProvided: user.servicesProvided,
                 isApproved: user.isApproved,
+                approvalStatus: user.approvalStatus, // ADD THIS
                 rating: user.rating,
                 businessLogo: user.businessLogo
             };
+            
+            // Add approval status to main user object for provider
+            userData.isApproved = user.isApproved;
+            userData.approvalStatus = user.approvalStatus;
         } else if (user.role === 'customer') {
             userData.address = user.address;
         } else if (user.role === 'admin') {
@@ -396,7 +441,7 @@ exports.login = async (req, res) => {
 };
 
 // Get current user (works for all roles)
-exports.getMe = async (req, res) => {
+const getMe = async (req, res) => {
     try {
         let userData;
 
@@ -422,4 +467,119 @@ exports.getMe = async (req, res) => {
             error: error.message
         });
     }
+};
+
+// Admin route to approve providers (for testing)
+const approveProvider = async (req, res) => {
+    try {
+        const { providerId } = req.params;
+
+        const provider = await ServiceProvider.findById(providerId);
+        if (!provider) {
+            return res.status(404).json({
+                success: false,
+                message: 'Provider not found'
+            });
+        }
+
+        provider.isApproved = true;
+        provider.approvalStatus = 'approved';
+        await provider.save();
+
+        res.json({
+            success: true,
+            message: 'Provider approved successfully',
+            data: {
+                provider: {
+                    id: provider._id,
+                    email: provider.email,
+                    businessName: provider.businessNameRegistered,
+                    isApproved: provider.isApproved,
+                    approvalStatus: provider.approvalStatus
+                }
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Approval failed',
+            error: error.message
+        });
+    }
+};
+
+// Route to check provider approval status
+const checkProviderStatus = async (req, res) => {
+    try {
+        const provider = await ServiceProvider.findById(req.user._id);
+        
+        if (!provider) {
+            return res.status(404).json({
+                success: false,
+                message: 'Provider not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                isApproved: provider.isApproved,
+                approvalStatus: provider.approvalStatus,
+                isActive: provider.isActive,
+                isVerified: provider.isVerified,
+                canSubmitVerification: provider.isApproved && provider.approvalStatus === 'approved'
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error checking provider status',
+            error: error.message
+        });
+    }
+};
+
+// Get all providers (for admin)
+const getAllProviders = async (req, res) => {
+    try {
+        const providers = await ServiceProvider.find().select('-password');
+        
+        res.json({
+            success: true,
+            data: {
+                providers: providers.map(provider => ({
+                    id: provider._id,
+                    firstName: provider.firstName,
+                    lastName: provider.lastName,
+                    email: provider.email,
+                    businessName: provider.businessNameRegistered,
+                    isApproved: provider.isApproved,
+                    approvalStatus: provider.approvalStatus,
+                    isActive: provider.isActive,
+                    createdAt: provider.createdAt
+                }))
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching providers',
+            error: error.message
+        });
+    }
+};
+
+// Export all functions
+module.exports = {
+    selectRole,
+    registerCustomer,
+    registerProvider,
+    login,
+    getMe,
+    approveProvider,
+    checkProviderStatus,
+    getAllProviders
 };

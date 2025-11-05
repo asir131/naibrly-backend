@@ -82,9 +82,63 @@ const deleteImageFromCloudinary = async (publicId) => {
     }
 };
 
+const insuranceDocumentStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'naibrly/insurance-documents',
+        format: async (req, file) => {
+            // Accept both images and PDFs
+            if (file.mimetype === 'application/pdf') return 'pdf';
+            return 'png';
+        },
+        public_id: (req, file) => {
+            const userId = req.user?._id || 'unknown';
+            const timestamp = Date.now();
+            return `insurance_${userId}_${timestamp}`;
+        },
+        transformation: file => {
+            if (file.mimetype === 'application/pdf') {
+                return []; // No transformation for PDFs
+            }
+            return [
+                { quality: 'auto' },
+                { format: 'png' }
+            ];
+        }
+    }
+});
+
+// File filter for insurance documents (images and PDFs)
+const insuranceFileFilter = (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
+        cb(null, true);
+    } else {
+        cb(new Error('Only image files and PDFs are allowed!'), false);
+    }
+};
+
+// Multer upload configuration for insurance documents
+const uploadInsuranceDocument = multer({
+    storage: insuranceDocumentStorage,
+    fileFilter: insuranceFileFilter,
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB limit for documents
+    }
+});
+
+const uploadProviderFiles = multer({
+    storage: profileImageStorage, // Use the same storage for both
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    }
+});
+
 module.exports = {
     cloudinary,
     uploadProfileImage,
     uploadBusinessLogo,
-    deleteImageFromCloudinary
+    uploadInsuranceDocument, // Add this
+    deleteImageFromCloudinary,
+    uploadProviderFiles
 };

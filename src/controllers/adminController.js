@@ -55,14 +55,6 @@ exports.adminLogin = async (req, res) => {
             });
         }
 
-        // Check credentials
-        if (username !== process.env.ADMIN_USERNAME || password !== process.env.ADMIN_PASSWORD) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid admin credentials'
-            });
-        }
-
         // Find or create admin
         let admin = await Admin.findOne({ email: username });
 
@@ -76,6 +68,15 @@ exports.adminLogin = async (req, res) => {
                 role: 'admin'
             });
             await admin.save();
+        }
+
+        // Check credentials
+        const isMatch = await admin.comparePassword(password);
+        if (!isMatch) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid admin credentials'
+            });
         }
 
         // Generate token

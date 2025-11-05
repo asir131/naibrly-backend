@@ -8,7 +8,7 @@ const {
     updateUserStatus,
     getAdminProfile
 } = require('../controllers/adminController');
-const { adminAuth } = require('../middleware/adminAuth');
+const { protect, adminAuth } = require('../middleware/adminAuth');
 
 const router = express.Router();
 
@@ -22,5 +22,8 @@ router.get('/providers', adminAuth, getAllProviders);
 router.patch('/providers/:providerId/approve', adminAuth, approveProvider);
 router.patch('/users/:userId/:role/status', adminAuth, updateUserStatus);
 router.get('/profile', adminAuth, getAdminProfile);
+// Admin routes
+// router.get('/admin/providers', protect, adminAuth, getAllProviders);
+// router.patch('/admin/approve-provider/:providerId', protect, adminAuth, approveProvider)
 
 module.exports = router;

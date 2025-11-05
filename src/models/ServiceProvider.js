@@ -2,7 +2,6 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const serviceProviderSchema = new mongoose.Schema({
-    // Personal Information
     firstName: {
         type: String,
         required: [true, 'First name is required'],
@@ -39,8 +38,6 @@ const serviceProviderSchema = new mongoose.Schema({
             default: ''
         }
     },
-    
-    // Business Information
     businessLogo: {
         url: {
             type: String,
@@ -77,8 +74,6 @@ const serviceProviderSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
-    
-    // Service Schedule
     serviceDays: {
         start: {
             type: String,
@@ -101,18 +96,34 @@ const serviceProviderSchema = new mongoose.Schema({
             required: true
         }
     },
-    
-    // Services
     servicesProvided: [{
         type: String,
         enum: [
+            'IKEA Assembly',
+            'TV Mounting',
+            'Furniture Assembly',
+            'General Mounting',
+            'Truck Assisted Help Moving',
+            'Help Moving',
+            'Cleaning',
+            'Door, Cabinet, & Furniture Repair',
+            'Heavy Lifting & Loading',
+            'Electrical help',
+            'Plumbing help',
+            'Painting',
+            'Carpentry',
+            'Appliance Installation',
+            'Home Organization',
             'Home Repairs & Maintenance',
             'Cleaning & Organization', 
             'Renovations & Upgrades'
         ]
     }],
-    
-    // Business Details
+    hourlyRates: {
+        type: Map,
+        of: Number,
+        default: {}
+    },
     description: {
         type: String,
         maxlength: 500
@@ -125,11 +136,9 @@ const serviceProviderSchema = new mongoose.Schema({
         type: Number,
         min: 0
     },
-    
-    // Status & Ratings
     isApproved: {
         type: Boolean,
-        default: false
+        default: true
     },
     isAvailable: {
         type: Boolean,
@@ -157,8 +166,6 @@ const serviceProviderSchema = new mongoose.Schema({
         type: Number,
         default: 0
     },
-    
-    // Documents & Verification
     documents: [{
         name: String,
         url: String,
@@ -170,14 +177,12 @@ const serviceProviderSchema = new mongoose.Schema({
     approvalNotes: {
         type: String
     },
-    
     resetPasswordToken: {
         type: String
     },
     resetPasswordExpires: {
         type: Date
     },
-    
     role: {
         type: String,
         default: 'provider',
@@ -187,7 +192,6 @@ const serviceProviderSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Hash password before saving
 serviceProviderSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
     
@@ -200,7 +204,6 @@ serviceProviderSchema.pre('save', async function(next) {
     }
 });
 
-// Compare password method
 serviceProviderSchema.methods.comparePassword = async function(candidatePassword) {
     return await bcrypt.compare(candidatePassword, this.password);
 };

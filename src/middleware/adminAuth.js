@@ -40,4 +40,5 @@ const adminAuth = async (req, res, next) => {
     }
 };
 
+// Make sure you're exporting correctly
 module.exports = { adminAuth };

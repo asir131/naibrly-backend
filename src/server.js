@@ -17,17 +17,17 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Add this route after other routes
-app.use('/api/auth/password-reset', require('./routes/passwordReset'));
-
 // Initialize admin user on server start
 initializeAdmin();
 
-// Routes
+// Routes - Make sure these are in correct order
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/service-requests', require('./routes/serviceRequests'));
 
-// Add this with other routes
+// Add these routes if you have them
+app.use('/api/auth/password-reset', require('./routes/passwordReset'));
+app.use('/api/verify-information', require('./routes/verification'));
 app.use('/api/upload', require('./routes/upload'));
 
 // Test route
