@@ -29,8 +29,14 @@ const customerSchema = new mongoose.Schema({
         required: [true, 'Phone number is required']
     },
     profileImage: {
-        type: String,
-        default: ''
+        url: {
+            type: String,
+            default: ''
+        },
+        publicId: {
+            type: String,
+            default: ''
+        }
     },
     address: {
         street: {
@@ -67,7 +73,6 @@ const customerSchema = new mongoose.Schema({
         default: 'customer',
         immutable: true
     },
-    // ADD RESET PASSWORD FIELDS
     resetPasswordToken: {
         type: String
     },

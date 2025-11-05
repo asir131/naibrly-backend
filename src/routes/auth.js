@@ -6,17 +6,35 @@ const {
     login,
     getMe
 } = require('../controllers/authController');
+const { uploadProfileImage, uploadBusinessLogo } = require('../config/cloudinary');
 const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Public routes
+// Role selection
 router.post('/select-role', selectRole);
-router.post('/register/customer', registerCustomer);
-router.post('/register/provider', registerProvider);
+
+// Customer registration with file upload
+router.post(
+    '/register/customer',
+    uploadProfileImage.single('profileImage'),
+    registerCustomer
+);
+
+// Service Provider registration with file uploads
+router.post(
+    '/register/provider',
+    uploadBusinessLogo.fields([
+        { name: 'profileImage', maxCount: 1 },
+        { name: 'businessLogo', maxCount: 1 }
+    ]),
+    registerProvider
+);
+
+// Login
 router.post('/login', login);
 
-// Protected routes
+// Get current user
 router.get('/me', auth, getMe);
 
 module.exports = router;

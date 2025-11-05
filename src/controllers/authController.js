@@ -1,6 +1,13 @@
 const Customer = require('../models/Customer');
 const ServiceProvider = require('../models/ServiceProvider');
+const Admin = require('../models/Admin');
+const { cloudinary } = require('../config/cloudinary');
 const jwt = require('jsonwebtoken');
+
+// Add this debug line to check if models are loaded
+console.log('Customer model:', typeof Customer);
+console.log('ServiceProvider model:', typeof ServiceProvider);
+console.log('Admin model:', typeof Admin);
 
 // Generate JWT Token
 const generateToken = (userId) => {
@@ -37,7 +44,7 @@ exports.selectRole = async (req, res) => {
     }
 };
 
-// Customer registration
+// Customer registration with file upload
 exports.registerCustomer = async (req, res) => {
     try {
         const {
@@ -47,13 +54,15 @@ exports.registerCustomer = async (req, res) => {
             password,
             confirmPassword,
             phone,
-            profileImage,
             street,
             city,
             state,
             zipCode,
             aptSuite
         } = req.body;
+
+        console.log('Registration data:', req.body);
+        console.log('Uploaded file:', req.file);
 
         // Validation
         if (password !== confirmPassword) {
@@ -74,6 +83,15 @@ exports.registerCustomer = async (req, res) => {
             });
         }
 
+        // Handle profile image upload
+        let profileImageData = { url: '', publicId: '' };
+        if (req.file) {
+            profileImageData = {
+                url: req.file.path,
+                publicId: req.file.filename
+            };
+        }
+
         // Create customer
         const customer = new Customer({
             firstName,
@@ -81,13 +99,13 @@ exports.registerCustomer = async (req, res) => {
             email,
             password,
             phone,
-            profileImage,
+            profileImage: profileImageData,
             address: {
                 street,
                 city,
                 state,
                 zipCode,
-                aptSuite
+                aptSuite: aptSuite || ''
             }
         });
 
@@ -115,6 +133,16 @@ exports.registerCustomer = async (req, res) => {
 
     } catch (error) {
         console.error('Customer registration error:', error);
+        
+        // Delete uploaded image if registration fails
+        if (req.file && req.file.filename) {
+            try {
+                await cloudinary.uploader.destroy(req.file.filename);
+            } catch (deleteError) {
+                console.error('Error deleting uploaded image:', deleteError);
+            }
+        }
+
         res.status(500).json({
             success: false,
             message: 'Customer registration failed',
@@ -123,7 +151,7 @@ exports.registerCustomer = async (req, res) => {
     }
 };
 
-// Service Provider registration
+// Service Provider registration with file uploads
 exports.registerProvider = async (req, res) => {
     try {
         const {
@@ -133,20 +161,24 @@ exports.registerProvider = async (req, res) => {
             password,
             confirmPassword,
             phone,
-            businessLogo,
             businessNameRegistered,
             businessNameDBA,
             providerRole,
             businessAddress,
             businessPhone,
             website,
-            serviceDays,
-            businessHours,
+            serviceDaysStart,
+            serviceDaysEnd,
+            businessHoursStart,
+            businessHoursEnd,
             servicesProvided,
             description,
             experience,
             hourlyRate
         } = req.body;
+
+        console.log('Provider registration data:', req.body);
+        console.log('Uploaded files:', req.files);
 
         // Validation
         if (password !== confirmPassword) {
@@ -167,6 +199,36 @@ exports.registerProvider = async (req, res) => {
             });
         }
 
+        // Handle profile image upload
+        let profileImageData = { url: '', publicId: '' };
+        if (req.files && req.files['profileImage']) {
+            const profileImage = req.files['profileImage'][0];
+            profileImageData = {
+                url: profileImage.path,
+                publicId: profileImage.filename
+            };
+        }
+
+        // Handle business logo upload
+        let businessLogoData = { url: '', publicId: '' };
+        if (req.files && req.files['businessLogo']) {
+            const businessLogo = req.files['businessLogo'][0];
+            businessLogoData = {
+                url: businessLogo.path,
+                publicId: businessLogo.filename
+            };
+        }
+
+        // Parse servicesProvided if it's a string
+        let servicesArray = [];
+        if (servicesProvided) {
+            if (typeof servicesProvided === 'string') {
+                servicesArray = servicesProvided.split(',').map(s => s.trim());
+            } else if (Array.isArray(servicesProvided)) {
+                servicesArray = servicesProvided;
+            }
+        }
+
         // Create service provider
         const serviceProvider = new ServiceProvider({
             firstName,
@@ -174,19 +236,26 @@ exports.registerProvider = async (req, res) => {
             email,
             password,
             phone,
-            businessLogo,
+            profileImage: profileImageData,
+            businessLogo: businessLogoData,
             businessNameRegistered,
-            businessNameDBA,
+            businessNameDBA: businessNameDBA || '',
             providerRole,
             businessAddress,
             businessPhone,
-            website,
-            serviceDays,
-            businessHours,
-            servicesProvided,
-            description,
-            experience,
-            hourlyRate
+            website: website || '',
+            serviceDays: {
+                start: serviceDaysStart,
+                end: serviceDaysEnd
+            },
+            businessHours: {
+                start: businessHoursStart,
+                end: businessHoursEnd
+            },
+            servicesProvided: servicesArray,
+            description: description || '',
+            experience: experience ? parseInt(experience) : 0,
+            hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0
         });
 
         await serviceProvider.save();
@@ -205,19 +274,36 @@ exports.registerProvider = async (req, res) => {
                     lastName: serviceProvider.lastName,
                     email: serviceProvider.email,
                     role: serviceProvider.role,
-                    phone: serviceProvider.phone
+                    phone: serviceProvider.phone,
+                    profileImage: serviceProvider.profileImage
                 },
                 providerProfile: {
                     businessName: serviceProvider.businessNameRegistered,
                     providerRole: serviceProvider.providerRole,
                     servicesProvided: serviceProvider.servicesProvided,
-                    isApproved: serviceProvider.isApproved
+                    isApproved: serviceProvider.isApproved,
+                    businessLogo: serviceProvider.businessLogo
                 }
             }
         });
 
     } catch (error) {
         console.error('Provider registration error:', error);
+        
+        // Delete uploaded images if registration fails
+        if (req.files) {
+            try {
+                if (req.files['profileImage']) {
+                    await cloudinary.uploader.destroy(req.files['profileImage'][0].filename);
+                }
+                if (req.files['businessLogo']) {
+                    await cloudinary.uploader.destroy(req.files['businessLogo'][0].filename);
+                }
+            } catch (deleteError) {
+                console.error('Error deleting uploaded images:', deleteError);
+            }
+        }
+
         res.status(500).json({
             success: false,
             message: 'Service provider registration failed',
@@ -281,7 +367,8 @@ exports.login = async (req, res) => {
                 providerRole: user.providerRole,
                 servicesProvided: user.servicesProvided,
                 isApproved: user.isApproved,
-                rating: user.rating
+                rating: user.rating,
+                businessLogo: user.businessLogo
             };
         } else if (user.role === 'customer') {
             userData.address = user.address;

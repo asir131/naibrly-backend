@@ -30,14 +30,26 @@ const serviceProviderSchema = new mongoose.Schema({
         required: [true, 'Phone number is required']
     },
     profileImage: {
-        type: String,
-        default: ''
+        url: {
+            type: String,
+            default: ''
+        },
+        publicId: {
+            type: String,
+            default: ''
+        }
     },
     
     // Business Information
     businessLogo: {
-        type: String,
-        default: ''
+        url: {
+            type: String,
+            default: ''
+        },
+        publicId: {
+            type: String,
+            default: ''
+        }
     },
     businessNameRegistered: {
         type: String,
@@ -159,17 +171,18 @@ const serviceProviderSchema = new mongoose.Schema({
         type: String
     },
     
+    resetPasswordToken: {
+        type: String
+    },
+    resetPasswordExpires: {
+        type: Date
+    },
+    
     role: {
         type: String,
         default: 'provider',
         immutable: true
-    },
-    resetPasswordToken: {
-    type: String
-},
-resetPasswordExpires: {
-    type: Date
-}
+    }
 }, {
     timestamps: true
 });

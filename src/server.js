@@ -27,6 +27,9 @@ initializeAdmin();
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/admin', require('./routes/admin'));
 
+// Add this with other routes
+app.use('/api/upload', require('./routes/upload'));
+
 // Test route
 app.get('/api/test', (req, res) => {
     res.json({ 
