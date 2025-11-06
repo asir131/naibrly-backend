@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 
-// Create transporter - FIXED: createTransport instead of createTransporter
-const createTransport = () => {
+// Create transporter - FIXED: Consistent function naming
+const createTransporter = () => {
     return nodemailer.createTransport({
         service: process.env.EMAIL_SERVICE || 'gmail',
         host: process.env.EMAIL_HOST || 'smtp.gmail.com',
@@ -17,7 +17,7 @@ const createTransport = () => {
 // Verify transporter connection
 const verifyTransporter = async () => {
     try {
-        const transporter = createTransporter();
+        const transporter = createTransporter(); // FIXED: Now matches function name
         await transporter.verify();
         console.log('✅ Email server is ready to send messages');
         return true;
@@ -30,7 +30,7 @@ const verifyTransporter = async () => {
 // Send OTP email
 const sendOTPEmail = async (email, otp, userName) => {
     try {
-        const transporter = createTransporter();
+        const transporter = createTransporter(); // FIXED: Now matches function name
         
         const mailOptions = {
             from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
@@ -81,7 +81,7 @@ const sendOTPEmail = async (email, otp, userName) => {
 // Send password reset success email
 const sendPasswordResetSuccessEmail = async (email, userName) => {
     try {
-        const transporter = createTransporter();
+        const transporter = createTransporter(); // FIXED: Now matches function name
         
         const mailOptions = {
             from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
