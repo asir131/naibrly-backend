@@ -9,7 +9,7 @@ const {
 const router = express.Router();
 
 // Send OTP for password reset
-router.post('/send-otp', sendResetOTP);
+router.post('/forgot-password', sendResetOTP);
 
 // Verify OTP
 router.post('/verify-otp', verifyOTP);

@@ -1,5 +1,8 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const path = require('path');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
 const { initializeAdmin } = require('./controllers/adminController');
@@ -13,29 +16,53 @@ connectDB();
 const app = express();
 
 // Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(helmet());
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  credentials: true
+}));
+app.use(morgan('combined'));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Serve uploaded files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Initialize admin user on server start
 initializeAdmin();
 
-// Routes - Make sure these are in correct order
+// Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/admin', require('./routes/admin'));
-app.use('/api/service-requests', require('./routes/serviceRequests'));
+app.use('/api/users', require('./routes/users'));
 
 // Add these routes if you have them
+app.use('/api/service-requests', require('./routes/serviceRequests'));
 app.use('/api/auth/password-reset', require('./routes/passwordReset'));
 app.use('/api/verify-information', require('./routes/verification'));
 app.use('/api/upload', require('./routes/upload'));
 
-// Test route
+// Test routes
+app.get('/health', (_req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
 app.get('/api/test', (req, res) => {
     res.json({ 
         success: true, 
         message: 'Naibrly API is working!' 
     });
+});
+
+app.get('/api/debug/test', (req, res) => {
+  res.json({ message: 'Debug route works!' });
+});
+
+app.post('/api/debug/test-post', (req, res) => {
+  res.json({ 
+    message: 'POST debug route works!',
+    body: req.body 
+  });
 });
 
 // Error handling middleware

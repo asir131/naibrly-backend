@@ -16,7 +16,7 @@ const auth = async (req, res, next) => {
 
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         
-        // Check in all models
+        // Check in all models - FIXED: using decoded.userId directly
         let user = await Customer.findById(decoded.userId);
         if (!user) user = await ServiceProvider.findById(decoded.userId);
         if (!user) user = await Admin.findById(decoded.userId);
@@ -38,6 +38,7 @@ const auth = async (req, res, next) => {
         req.user = user;
         next();
     } catch (error) {
+        console.error('Auth middleware error:', error);
         res.status(401).json({ 
             success: false, 
             message: 'Token is not valid' 
@@ -57,5 +58,4 @@ const authorize = (...roles) => {
     };
 };
 
-// Make sure you're exporting correctly
 module.exports = { auth, authorize };

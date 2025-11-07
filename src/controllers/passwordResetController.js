@@ -48,7 +48,7 @@ exports.sendResetOTP = async (req, res) => {
         }
 
         // Generate OTP
-        const otpCode = generateOTP(parseInt(process.env.OTP_LENGTH) || 5);
+        const otpCode = generateOTP(parseInt(process.env.OTP_LENGTH) || 4);
         const expiresAt = new Date(Date.now() + (parseInt(process.env.OTP_EXPIRY_MINUTES) || 10) * 60 * 1000);
 
         // Delete any existing OTPs for this email

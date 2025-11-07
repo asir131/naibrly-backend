@@ -1,39 +1,18 @@
-const User = require('../models/User');
+const Customer = require('../models/Customer');
 const ServiceProvider = require('../models/ServiceProvider');
-
-// Get all users (Admin only)
-exports.getAllUsers = async (req, res) => {
-    try {
-        const users = await User.find().select('-password');
-        res.json({
-            success: true,
-            data: { users }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
-    }
-};
 
 // Get user profile
 exports.getUserProfile = async (req, res) => {
     try {
-        let profileData = { user: req.user };
-
-        // If user is a provider, include provider details
-        if (req.user.role === 'provider') {
-            const providerProfile = await ServiceProvider.findOne({ _id: req.user._id });
-            profileData.providerProfile = providerProfile;
-        }
+        // User is already attached to req by auth middleware
+        const user = req.user;
 
         res.json({
             success: true,
-            data: profileData
+            data: { user }
         });
     } catch (error) {
+        console.error('Get user profile error:', error);
         res.status(500).json({
             success: false,
             message: 'Server error',
@@ -45,13 +24,29 @@ exports.getUserProfile = async (req, res) => {
 // Update user profile
 exports.updateUserProfile = async (req, res) => {
     try {
-        const { name, phone } = req.body;
+        const { firstName, lastName, phone } = req.body;
+        let user;
         
-        const user = await User.findByIdAndUpdate(
-            req.user._id,
-            { name, phone },
-            { new: true, runValidators: true }
-        ).select('-password');
+        if (req.user.role === 'customer') {
+            user = await Customer.findByIdAndUpdate(
+                req.user._id,
+                { firstName, lastName, phone },
+                { new: true, runValidators: true }
+            ).select('-password');
+        } else if (req.user.role === 'provider') {
+            user = await ServiceProvider.findByIdAndUpdate(
+                req.user._id,
+                { firstName, lastName, phone },
+                { new: true, runValidators: true }
+            ).select('-password');
+        }
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
 
         res.json({
             success: true,
@@ -59,6 +54,7 @@ exports.updateUserProfile = async (req, res) => {
             data: { user }
         });
     } catch (error) {
+        console.error('Update profile error:', error);
         res.status(500).json({
             success: false,
             message: 'Profile update failed',

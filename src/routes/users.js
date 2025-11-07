@@ -1,17 +1,13 @@
 const express = require('express');
 const {
-    getAllUsers,
     getUserProfile,
     updateUserProfile
 } = require('../controllers/userController');
-const { auth, authorize } = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Admin routes
-router.get('/', auth, authorize('admin'), getAllUsers);
-
-// User routes
+// User routes - protected
 router.get('/profile', auth, getUserProfile);
 router.put('/profile', auth, updateUserProfile);
 
