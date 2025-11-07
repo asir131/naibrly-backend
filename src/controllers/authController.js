@@ -4,39 +4,9 @@ const Admin = require('../models/Admin');
 const { cloudinary } = require('../config/cloudinary');
 const jwt = require('jsonwebtoken');
 
-// Generate JWT Token - FIXED: Only include userId
+// Generate JWT Token
 const generateToken = (userId) => {
     return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '30d' });
-};
-
-// Role selection
-exports.selectRole = async (req, res) => {
-    try {
-        const { role } = req.body;
-
-        if (!['customer', 'provider'].includes(role)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please select a valid role: customer or provider'
-            });
-        }
-
-        res.json({
-            success: true,
-            message: `Role ${role} selected successfully`,
-            data: { 
-                selectedRole: role,
-                nextStep: 'registration'
-            }
-        });
-    } catch (error) {
-        console.error('Role selection error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during role selection',
-            error: error.message
-        });
-    }
 };
 
 // Customer registration with file upload
@@ -164,7 +134,12 @@ exports.registerProvider = async (req, res) => {
             servicesProvided,
             description,
             experience,
-            hourlyRate
+            hourlyRate,
+            // New fields for business service days and hours
+            businessServiceStart,
+            businessServiceEnd,
+            businessHoursStart,
+            businessHoursEnd
         } = req.body;
 
         // Validation
@@ -187,30 +162,19 @@ exports.registerProvider = async (req, res) => {
             });
         }
 
-        // Parse serviceDays from individual form fields
-        const serviceDaysData = {
-            start: req.body.serviceDaysStart,
-            end: req.body.serviceDaysEnd
-        };
-
-        // Parse businessHours from individual form fields
-        const businessHoursData = {
-            start: req.body.businessHoursStart,
-            end: req.body.businessHoursEnd
-        };
-
-        // Validate required nested fields
-        if (!serviceDaysData.start || !serviceDaysData.end) {
+        // Validate required business service days
+        if (!businessServiceStart || !businessServiceEnd) {
             return res.status(400).json({
                 success: false,
-                message: 'Service days start and end are required'
+                message: 'Business service start and end days are required'
             });
         }
 
-        if (!businessHoursData.start || !businessHoursData.end) {
+        // Validate required business hours
+        if (!businessHoursStart || !businessHoursEnd) {
             return res.status(400).json({
                 success: false,
-                message: 'Business hours start and end are required'
+                message: 'Business hours start and end times are required'
             });
         }
 
@@ -244,7 +208,7 @@ exports.registerProvider = async (req, res) => {
             }
         }
 
-        // Create service provider
+        // Create service provider with all the new fields
         const serviceProvider = new ServiceProvider({
             firstName,
             lastName,
@@ -259,12 +223,19 @@ exports.registerProvider = async (req, res) => {
             businessAddress,
             businessPhone,
             website: website || '',
-            serviceDays: serviceDaysData,
-            businessHours: businessHoursData,
+            // New business service days and hours
+            businessServiceDays: {
+                start: businessServiceStart,
+                end: businessServiceEnd
+            },
+            businessHours: {
+                start: businessHoursStart,
+                end: businessHoursEnd
+            },
             servicesProvided: servicesArray,
             description: description || '',
             experience: experience ? parseInt(experience) : 0,
-            hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0,
+            hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0, // Single hourly rate
             isApproved: true,
             isActive: true,
             isVerified: true
@@ -296,7 +267,10 @@ exports.registerProvider = async (req, res) => {
                     businessName: serviceProvider.businessNameRegistered,
                     providerRole: serviceProvider.providerRole,
                     servicesProvided: serviceProvider.servicesProvided,
-                    businessLogo: serviceProvider.businessLogo
+                    businessLogo: serviceProvider.businessLogo,
+                    businessServiceDays: serviceProvider.businessServiceDays,
+                    businessHours: serviceProvider.businessHours,
+                    hourlyRate: serviceProvider.hourlyRate
                 }
             }
         });
@@ -393,12 +367,16 @@ exports.login = async (req, res) => {
         // Add role-specific data
         if (role === 'provider') {
             userData.isApproved = user.isApproved;
+            userData.hourlyRate = user.hourlyRate;
             userData.providerProfile = {
                 businessName: user.businessNameRegistered,
                 providerRole: user.providerRole,
                 servicesProvided: user.servicesProvided,
                 businessLogo: user.businessLogo,
-                rating: user.rating
+                businessServiceDays: user.businessServiceDays,
+                businessHours: user.businessHours,
+                rating: user.rating,
+                hourlyRate: user.hourlyRate
             };
         } else if (role === 'customer') {
             userData.address = user.address;

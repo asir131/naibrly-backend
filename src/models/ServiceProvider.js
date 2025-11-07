@@ -74,28 +74,8 @@ const serviceProviderSchema = new mongoose.Schema({
         type: String,
         default: ''
     },
-    serviceDays: {
-        start: {
-            type: String,
-            enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
-            required: true
-        },
-        end: {
-            type: String,
-            enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
-            required: true
-        }
-    },
-    businessHours: {
-        start: {
-            type: String,
-            required: true
-        },
-        end: {
-            type: String,
-            required: true
-        }
-    },
+   
+    
     servicesProvided: [{
         type: String,
         enum: [
@@ -119,11 +99,7 @@ const serviceProviderSchema = new mongoose.Schema({
             'Renovations & Upgrades'
         ]
     }],
-    hourlyRates: {
-        type: Map,
-        of: Number,
-        default: {}
-    },
+    
     description: {
         type: String,
         maxlength: 500
@@ -132,10 +108,33 @@ const serviceProviderSchema = new mongoose.Schema({
         type: Number,
         min: 0
     },
+     businessServiceDays: {
+        start: {
+            type: String,
+            enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
+            required: true
+        },
+        end: {
+            type: String,
+            enum: ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'],
+            required: true
+        }
+    },
+    businessHours: {
+        start: {
+            type: String,
+            required: true
+        },
+        end: {
+            type: String,
+            required: true
+        }
+    },
     hourlyRate: {
         type: Number,
         min: 0
     },
+   
     isApproved: {
         type: Boolean,
         default: true

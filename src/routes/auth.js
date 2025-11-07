@@ -1,6 +1,5 @@
 const express = require('express');
 const {
-    selectRole,
     registerCustomer,
     registerProvider,
     login,
@@ -11,8 +10,8 @@ const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Role selection
-router.post('/select-role', selectRole);
+// Remove this line:
+// router.post('/select-role', selectRole);
 
 // Customer registration with file upload
 router.post(
