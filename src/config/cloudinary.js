@@ -1,151 +1,119 @@
-const cloudinary = require('cloudinary').v2;
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const multer = require('multer');
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const multer = require("multer");
 
 // Configure Cloudinary
 cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// File filter for images only
-const fileFilter = (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-        cb(null, true);
-    } else {
-        cb(new Error('Only image files are allowed!'), false);
-    }
+// Universal storage configuration for all images
+const createCloudinaryStorage = (folder) => {
+  return new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+      folder: `naibrly/${folder}`,
+      format: async (req, file) => {
+        // Support multiple image formats
+        if (file.mimetype === "image/jpeg") return "jpg";
+        if (file.mimetype === "image/png") return "png";
+        if (file.mimetype === "image/webp") return "webp";
+        return "png"; // default
+      },
+      public_id: (req, file) => {
+        const timestamp = Date.now();
+        const randomString = Math.random().toString(36).substring(2, 15);
+        return `${folder}_${timestamp}_${randomString}`;
+      },
+    },
+  });
 };
 
-// Configure storage for profile images
-const profileImageStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/profiles',
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-        transformation: [
-            { width: 500, height: 500, crop: 'limit' },
-            { quality: 'auto' }
-        ]
-    }
-});
+// Create storage configurations
+const profileImageStorage = createCloudinaryStorage("profiles");
+const businessLogoStorage = createCloudinaryStorage("business-logos");
+const insuranceDocumentStorage = createCloudinaryStorage("insurance-documents");
+const documentStorage = createCloudinaryStorage("documents");
 
-// Configure storage for business logos
-const businessLogoStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/business-logos',
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-        transformation: [
-            { width: 300, height: 300, crop: 'limit' },
-            { quality: 'auto' }
-        ]
-    }
-});
-
-// Configure storage for category type images
-const categoryTypeImageStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/category-types',
-        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-        transformation: [
-            { width: 600, height: 400, crop: 'limit' },
-            { quality: 'auto' }
-        ]
-    }
-});
-
-const insuranceDocumentStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/insurance-documents',
-        format: async (req, file) => {
-            if (file.mimetype === 'application/pdf') return 'pdf';
-            return 'png';
-        },
-        public_id: (req, file) => {
-            const userId = req.user?._id || 'unknown';
-            const timestamp = Date.now();
-            return `insurance_${userId}_${timestamp}`;
-        },
-        transformation: file => {
-            if (file.mimetype === 'application/pdf') {
-                return [];
-            }
-            return [
-                { quality: 'auto' }
-            ];
-        }
-    }
-});
-
-// Multer upload configurations
-const uploadProfileImage = multer({
-    storage: profileImageStorage,
-    fileFilter: fileFilter,
+// Create universal image upload middleware (accepts any field name)
+const createImageUpload = (storage) => {
+  return multer({
+    storage: storage,
     limits: {
-        fileSize: 5 * 1024 * 1024
-    }
-});
-
-const uploadBusinessLogo = multer({
-    storage: businessLogoStorage,
-    fileFilter: fileFilter,
-    limits: {
-        fileSize: 5 * 1024 * 1024
-    }
-});
-
-// Category type image upload - SIMPLIFIED
-// const uploadCategoryTypeImage = multer({
-//     storage: categoryTypeImageStorage,
-//     fileFilter: fileFilter,
-//     limits: {
-//         fileSize: 5 * 1024 * 1024
-//     }
-// });
-
-const uploadInsuranceDocument = multer({
-    storage: insuranceDocumentStorage,
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
-            cb(null, true);
-        } else {
-            cb(new Error('Only image files and PDFs are allowed!'), false);
-        }
+      fileSize: 5 * 1024 * 1024, // 5MB limit
     },
-    limits: {
-        fileSize: 10 * 1024 * 1024
-    }
-});
+    fileFilter: (req, file, cb) => {
+      if (file.mimetype.startsWith("image/")) {
+        cb(null, true);
+      } else {
+        cb(new Error("Only image files are allowed!"), false);
+      }
+    },
+  });
+};
 
-const uploadProviderFiles = multer({
-    storage: profileImageStorage,
-    fileFilter: fileFilter,
+// Create document upload middleware
+const createDocumentUpload = (storage) => {
+  return multer({
+    storage: storage,
     limits: {
-        fileSize: 5 * 1024 * 1024
-    }
-});
+      fileSize: 10 * 1024 * 1024, // 10MB limit for documents
+    },
+    fileFilter: (req, file, cb) => {
+      if (
+        file.mimetype.startsWith("image/") ||
+        file.mimetype === "application/pdf"
+      ) {
+        cb(null, true);
+      } else {
+        cb(new Error("Only image and PDF files are allowed!"), false);
+      }
+    },
+  });
+};
 
-// Utility function to delete image from Cloudinary
+// Export upload middlewares
+const uploadProfileImage = createImageUpload(profileImageStorage);
+const uploadBusinessLogo = createImageUpload(businessLogoStorage);
+const uploadInsuranceDocument = createDocumentUpload(insuranceDocumentStorage);
+const uploadDocument = createDocumentUpload(documentStorage);
+
+// Universal upload middleware that accepts any field name for images
+const uploadAnyImage = createImageUpload(createCloudinaryStorage("uploads"));
+
+// Function to delete image from Cloudinary
 const deleteImageFromCloudinary = async (publicId) => {
-    try {
-        if (!publicId) return;
-        const result = await cloudinary.uploader.destroy(publicId);
-        return result;
-    } catch (error) {
-        console.error('Error deleting image from Cloudinary:', error);
-    }
+  try {
+    const result = await cloudinary.uploader.destroy(publicId);
+    return result;
+  } catch (error) {
+    console.error("Error deleting image from Cloudinary:", error);
+    throw error;
+  }
+};
+
+// Function to delete document from Cloudinary
+const deleteDocumentFromCloudinary = async (publicId) => {
+  try {
+    const result = await cloudinary.uploader.destroy(publicId, {
+      resource_type: "raw",
+    });
+    return result;
+  } catch (error) {
+    console.error("Error deleting document from Cloudinary:", error);
+    throw error;
+  }
 };
 
 module.exports = {
-    cloudinary,
-    uploadProfileImage,
-    uploadBusinessLogo,
-    // uploadCategoryTypeImage,
-    uploadInsuranceDocument,
-    deleteImageFromCloudinary,
-    uploadProviderFiles
+  cloudinary,
+  uploadProfileImage,
+  uploadBusinessLogo,
+  uploadInsuranceDocument,
+  uploadDocument,
+  uploadAnyImage, // Add this universal uploader
+  deleteImageFromCloudinary,
+  deleteDocumentFromCloudinary,
 };

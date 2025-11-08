@@ -1,585 +1,720 @@
-const Customer = require('../models/Customer');
-const ServiceProvider = require('../models/ServiceProvider');
-const Admin = require('../models/Admin');
-const { cloudinary } = require('../config/cloudinary');
-const jwt = require('jsonwebtoken');
+const Customer = require("../models/Customer");
+const ServiceProvider = require("../models/ServiceProvider");
+const Service = require("../models/Service");
+const Admin = require("../models/Admin");
+const { cloudinary } = require("../config/cloudinary");
+const jwt = require("jsonwebtoken");
 
-// Generate JWT Token
 const generateToken = (userId) => {
-    return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '30d' });
+  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "30d" });
 };
 
-// Role selection
-const selectRole = async (req, res) => {
-    try {
-        const { role } = req.body;
+// Upload buffer to Cloudinary
+const uploadToCloudinary = async (buffer, folder, filename) => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      {
+        folder: folder,
+        public_id: filename,
+        resource_type: "image",
+      },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result);
+      }
+    );
 
-        if (!['customer', 'provider'].includes(role)) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please select a valid role: customer or provider'
-            });
-        }
-
-        res.json({
-            success: true,
-            message: `Role ${role} selected successfully`,
-            data: { 
-                selectedRole: role,
-                nextStep: 'registration'
-            }
-        });
-    } catch (error) {
-        console.error('Role selection error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during role selection',
-            error: error.message
-        });
-    }
+    const { Readable } = require("stream");
+    const stream = Readable.from(buffer);
+    stream.pipe(uploadStream);
+  });
 };
 
-// Customer registration with file upload
+// Enhanced customer registration with proper image handling
 const registerCustomer = async (req, res) => {
-    try {
-        const {
-            firstName,
-            lastName,
-            email,
-            password,
-            confirmPassword,
-            phone,
-            street,
-            city,
-            state,
-            zipCode,
-            aptSuite
-        } = req.body;
+  console.log("=== CUSTOMER REGISTRATION STARTED ===");
+  console.log("Request file:", req.file);
+  console.log("Request body:", req.body);
 
-        // Validation
-        if (password !== confirmPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'Passwords do not match'
-            });
-        }
+  try {
+    const {
+      firstName,
+      lastName,
+      email,
+      password,
+      confirmPassword,
+      phone,
+      street,
+      city,
+      state,
+      zipCode,
+      aptSuite,
+    } = req.body;
 
-        // Check if user already exists
-        const existingCustomer = await Customer.findOne({ email });
-        let existingProvider = null;
-        
-        try {
-            if (ServiceProvider && typeof ServiceProvider.findOne === 'function') {
-                existingProvider = await ServiceProvider.findOne({ email });
-            }
-        } catch (error) {
-            console.warn('ServiceProvider check failed:', error.message);
-        }
-        
-        if (existingCustomer || existingProvider) {
-            return res.status(400).json({
-                success: false,
-                message: 'User already exists with this email'
-            });
-        }
-
-        // Handle profile image upload
-        let profileImageData = { url: '', publicId: '' };
-        if (req.file) {
-            profileImageData = {
-                url: req.file.path,
-                publicId: req.file.filename
-            };
-        }
-
-        // Create customer
-        const customer = new Customer({
-            firstName,
-            lastName,
-            email,
-            password,
-            phone,
-            profileImage: profileImageData,
-            address: {
-                street,
-                city,
-                state,
-                zipCode,
-                aptSuite: aptSuite || ''
-            }
-        });
-
-        await customer.save();
-
-        // Generate token
-        const token = generateToken(customer._id);
-
-        res.status(201).json({
-            success: true,
-            message: 'Customer registered successfully',
-            data: {
-                token,
-                user: {
-                    id: customer._id,
-                    firstName: customer.firstName,
-                    lastName: customer.lastName,
-                    email: customer.email,
-                    role: customer.role,
-                    profileImage: customer.profileImage,
-                    address: customer.address
-                }
-            }
-        });
-
-    } catch (error) {
-        console.error('Customer registration error:', error);
-        
-        if (req.file && req.file.filename) {
-            try {
-                await cloudinary.uploader.destroy(req.file.filename);
-            } catch (deleteError) {
-                console.error('Error deleting uploaded image:', deleteError);
-            }
-        }
-
-        res.status(500).json({
-            success: false,
-            message: 'Customer registration failed',
-            error: error.message
-        });
+    // Validate required fields
+    if (
+      !firstName ||
+      !lastName ||
+      !email ||
+      !password ||
+      !phone ||
+      !street ||
+      !city ||
+      !state ||
+      !zipCode
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "All required fields must be provided",
+      });
     }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Passwords do not match",
+      });
+    }
+
+    const existingCustomer = await Customer.findOne({ email });
+    let existingProvider = null;
+
+    try {
+      if (ServiceProvider && typeof ServiceProvider.findOne === "function") {
+        existingProvider = await ServiceProvider.findOne({ email });
+      }
+    } catch (error) {
+      console.warn("ServiceProvider check failed:", error.message);
+    }
+
+    if (existingCustomer || existingProvider) {
+      return res.status(400).json({
+        success: false,
+        message: "User already exists with this email",
+      });
+    }
+
+    // Handle image upload from memory buffer
+    let profileImageData = { url: "", publicId: "" };
+    if (req.file) {
+      console.log("Processing uploaded file for customer from memory buffer");
+
+      try {
+        const timestamp = Date.now();
+        const randomString = Math.random().toString(36).substring(2, 15);
+        const publicId = `customer_profile_${timestamp}_${randomString}`;
+
+        const result = await uploadToCloudinary(
+          req.file.buffer,
+          "naibrly/profiles",
+          publicId
+        );
+
+        profileImageData = {
+          url: result.secure_url,
+          publicId: result.public_id,
+        };
+        console.log("Profile image uploaded to Cloudinary:", profileImageData);
+      } catch (uploadError) {
+        console.error(
+          "Cloudinary upload error for customer profile:",
+          uploadError
+        );
+        // Continue without image if upload fails
+      }
+    }
+
+    const customer = new Customer({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.toLowerCase().trim(),
+      password,
+      phone: phone.trim(),
+      profileImage: profileImageData,
+      address: {
+        street: street.trim(),
+        city: city.trim(),
+        state: state.trim(),
+        zipCode: zipCode.trim(),
+        aptSuite: aptSuite ? aptSuite.trim() : "",
+      },
+    });
+
+    console.log("Customer object before save:", customer);
+
+    await customer.save();
+
+    // Verify what was actually saved
+    const savedCustomer = await Customer.findById(customer._id);
+    console.log(
+      "Customer after save - profileImage:",
+      savedCustomer.profileImage
+    );
+
+    const token = generateToken(customer._id);
+
+    console.log("=== CUSTOMER REGISTRATION SUCCESS ===");
+
+    res.status(201).json({
+      success: true,
+      message: "Customer registered successfully",
+      data: {
+        token,
+        user: {
+          id: customer._id,
+          firstName: customer.firstName,
+          lastName: customer.lastName,
+          email: customer.email,
+          role: customer.role,
+          profileImage: customer.profileImage,
+          address: customer.address,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Customer registration error:", error);
+
+    // Handle specific error types
+    if (error.name === "ValidationError") {
+      const errors = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors,
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already exists",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Customer registration failed",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
+    });
+  }
 };
 
-// Service Provider registration with file uploads
+// Enhanced provider registration with proper image handling
 const registerProvider = async (req, res) => {
-    try {
-        const {
-            firstName,
-            lastName,
-            email,
-            password,
-            confirmPassword,
-            phone,
-            businessNameRegistered,
-            businessNameDBA,
-            providerRole,
-            businessAddress,
-            businessPhone,
-            website,
-            servicesProvided,
-            description,
-            experience,
-            hourlyRate
-        } = req.body;
+  try {
+    const {
+      firstName,
+      lastName,
+      email,
+      password,
+      phone,
+      businessNameRegistered,
+      businessNameDBA,
+      providerRole,
+      businessAddress,
+      businessPhone,
+      website,
+      servicesProvided,
+      description,
+      experience,
+      hourlyRate,
+      businessServiceStart,
+      businessServiceEnd,
+      businessHoursStart,
+      businessHoursEnd,
+    } = req.body;
 
-        // Validation
-        if (password !== confirmPassword) {
-            return res.status(400).json({
-                success: false,
-                message: 'Passwords do not match'
-            });
-        }
-
-        // Check if user already exists
-        const existingCustomer = await Customer.findOne({ email });
-        let existingProvider = null;
-        
-        try {
-            if (ServiceProvider && typeof ServiceProvider.findOne === 'function') {
-                existingProvider = await ServiceProvider.findOne({ email });
-            }
-        } catch (error) {
-            console.warn('ServiceProvider check failed:', error.message);
-        }
-        
-        if (existingCustomer || existingProvider) {
-            return res.status(400).json({
-                success: false,
-                message: 'User already exists with this email'
-            });
-        }
-
-        // Parse serviceDays from individual form fields
-        const serviceDaysData = {
-            start: req.body.serviceDaysStart,
-            end: req.body.serviceDaysEnd
-        };
-
-        // Parse businessHours from individual form fields
-        const businessHoursData = {
-            start: req.body.businessHoursStart,
-            end: req.body.businessHoursEnd
-        };
-
-        // Validate required nested fields
-        if (!serviceDaysData.start || !serviceDaysData.end) {
-            return res.status(400).json({
-                success: false,
-                message: 'Service days start and end are required'
-            });
-        }
-
-        if (!businessHoursData.start || !businessHoursData.end) {
-            return res.status(400).json({
-                success: false,
-                message: 'Business hours start and end are required'
-            });
-        }
-
-        // Handle profile image upload
-        let profileImageData = { url: '', publicId: '' };
-        if (req.files && req.files['profileImage']) {
-            const profileImage = req.files['profileImage'][0];
-            profileImageData = {
-                url: profileImage.path,
-                publicId: profileImage.filename
-            };
-        }
-
-        // Handle business logo upload
-        let businessLogoData = { url: '', publicId: '' };
-        if (req.files && req.files['businessLogo']) {
-            const businessLogo = req.files['businessLogo'][0];
-            businessLogoData = {
-                url: businessLogo.path,
-                publicId: businessLogo.filename
-            };
-        }
-
-        // Parse servicesProvided if it's a string
-        let servicesArray = [];
-        if (servicesProvided) {
-            if (typeof servicesProvided === 'string') {
-                servicesArray = servicesProvided.split(',').map(s => s.trim());
-            } else if (Array.isArray(servicesProvided)) {
-                servicesArray = servicesProvided;
-            }
-        }
-
-        // Create service provider - AUTO APPROVE FOR TESTING
-        const serviceProvider = new ServiceProvider({
-            firstName,
-            lastName,
-            email,
-            password,
-            phone,
-            profileImage: profileImageData,
-            businessLogo: businessLogoData,
-            businessNameRegistered,
-            businessNameDBA: businessNameDBA || '',
-            providerRole,
-            businessAddress,
-            businessPhone,
-            website: website || '',
-            serviceDays: serviceDaysData,
-            businessHours: businessHoursData,
-            servicesProvided: servicesArray,
-            description: description || '',
-            experience: experience ? parseInt(experience) : 0,
-            hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0,
-            isApproved: true, // AUTO APPROVE PROVIDERS FOR TESTING
-            approvalStatus: 'approved', // ADD THIS FIELD
-            isActive: true, // ENSURE THIS IS TRUE
-            isVerified: true // ADD THIS FIELD
-        });
-
-        await serviceProvider.save();
-
-        // Generate token
-        const token = generateToken(serviceProvider._id);
-
-        res.status(201).json({
-            success: true,
-            message: 'Service provider registered and approved successfully',
-            data: {
-                token,
-                user: {
-                    id: serviceProvider._id,
-                    firstName: serviceProvider.firstName,
-                    lastName: serviceProvider.lastName,
-                    email: serviceProvider.email,
-                    role: serviceProvider.role,
-                    phone: serviceProvider.phone,
-                    profileImage: serviceProvider.profileImage,
-                    isApproved: serviceProvider.isApproved, // INCLUDE THIS
-                    approvalStatus: serviceProvider.approvalStatus, // INCLUDE THIS
-                    isVerified: serviceProvider.isVerified // INCLUDE THIS
-                },
-                providerProfile: {
-                    businessName: serviceProvider.businessNameRegistered,
-                    providerRole: serviceProvider.providerRole,
-                    servicesProvided: serviceProvider.servicesProvided,
-                    isApproved: serviceProvider.isApproved,
-                    approvalStatus: serviceProvider.approvalStatus,
-                    businessLogo: serviceProvider.businessLogo
-                }
-            }
-        });
-
-    } catch (error) {
-        console.error('Provider registration error:', error);
-        
-        if (req.files) {
-            try {
-                if (req.files['profileImage']) {
-                    await cloudinary.uploader.destroy(req.files['profileImage'][0].filename);
-                }
-                if (req.files['businessLogo']) {
-                    await cloudinary.uploader.destroy(req.files['businessLogo'][0].filename);
-                }
-            } catch (deleteError) {
-                console.error('Error deleting uploaded images:', deleteError);
-            }
-        }
-
-        res.status(500).json({
-            success: false,
-            message: 'Service provider registration failed',
-            error: error.message
-        });
+    if (
+      !firstName ||
+      !lastName ||
+      !email ||
+      !password ||
+      !phone ||
+      !businessNameRegistered ||
+      !providerRole ||
+      !businessAddress ||
+      !businessPhone
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Please fill in all required fields",
+      });
     }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+
+    const existingProvider = await ServiceProvider.findOne({ email });
+    if (existingProvider) {
+      return res.status(400).json({
+        success: false,
+        message: "Service provider already exists with this email",
+      });
+    }
+
+    let servicesArray = [];
+    if (servicesProvided) {
+      let serviceNames = [];
+
+      if (typeof servicesProvided === "string") {
+        serviceNames = servicesProvided.split(",").map((s) => s.trim());
+      } else if (Array.isArray(servicesProvided)) {
+        serviceNames = servicesProvided;
+      }
+
+      serviceNames = [...new Set(serviceNames)].filter(
+        (name) => name.length > 0
+      );
+
+      if (serviceNames.length > 0) {
+        const services = await Service.find({
+          name: { $in: serviceNames },
+          isActive: true,
+        });
+
+        if (services.length !== serviceNames.length) {
+          const foundServiceNames = services.map((s) => s.name);
+          const missingServices = serviceNames.filter(
+            (name) => !foundServiceNames.includes(name)
+          );
+
+          return res.status(400).json({
+            success: false,
+            message: `Invalid services: ${missingServices.join(
+              ", "
+            )}. Please provide valid service names.`,
+          });
+        }
+
+        // CHANGED: Save service names instead of IDs
+        servicesArray = serviceNames;
+      }
+    }
+
+    const businessServiceDays = {
+      start: businessServiceStart,
+      end: businessServiceEnd,
+    };
+
+    const businessHours = {
+      start: businessHoursStart,
+      end: businessHoursEnd,
+    };
+
+    if (!businessServiceDays.start || !businessServiceDays.end) {
+      return res.status(400).json({
+        success: false,
+        message: "Business service start and end are required",
+      });
+    }
+
+    if (!businessHours.start || !businessHours.end) {
+      return res.status(400).json({
+        success: false,
+        message: "Business hours start and end are required",
+      });
+    }
+
+    // Handle profile image upload from memory buffer
+    let profileImageData = { url: "", publicId: "" };
+    if (req.files && req.files["profileImage"]) {
+      const profileImage = req.files["profileImage"][0];
+      console.log("Processing profile image from memory buffer");
+
+      try {
+        const timestamp = Date.now();
+        const randomString = Math.random().toString(36).substring(2, 15);
+        const publicId = `provider_profile_${timestamp}_${randomString}`;
+
+        const result = await uploadToCloudinary(
+          profileImage.buffer,
+          "naibrly/profiles",
+          publicId
+        );
+
+        profileImageData = {
+          url: result.secure_url,
+          publicId: result.public_id,
+        };
+        console.log("Profile image uploaded to Cloudinary:", profileImageData);
+      } catch (uploadError) {
+        console.error(
+          "Cloudinary upload error for profile image:",
+          uploadError
+        );
+      }
+    }
+
+    // Handle business logo upload from memory buffer
+    let businessLogoData = { url: "", publicId: "" };
+    if (req.files && req.files["businessLogo"]) {
+      const businessLogo = req.files["businessLogo"][0];
+      console.log("Processing business logo from memory buffer");
+
+      try {
+        const timestamp = Date.now();
+        const randomString = Math.random().toString(36).substring(2, 15);
+        const publicId = `business_logo_${timestamp}_${randomString}`;
+
+        const result = await uploadToCloudinary(
+          businessLogo.buffer,
+          "naibrly/business-logos",
+          publicId
+        );
+
+        businessLogoData = {
+          url: result.secure_url,
+          publicId: result.public_id,
+        };
+        console.log("Business logo uploaded to Cloudinary:", businessLogoData);
+      } catch (uploadError) {
+        console.error(
+          "Cloudinary upload error for business logo:",
+          uploadError
+        );
+      }
+    }
+
+    const serviceProvider = new ServiceProvider({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.toLowerCase().trim(),
+      password,
+      phone: phone.trim(),
+      profileImage: profileImageData,
+      businessLogo: businessLogoData,
+      businessNameRegistered: businessNameRegistered.trim(),
+      businessNameDBA: businessNameDBA ? businessNameDBA.trim() : "",
+      providerRole,
+      businessAddress: businessAddress.trim(),
+      businessPhone: businessPhone.trim(),
+      website: website ? website.trim() : "",
+      // CHANGED: Store service names directly instead of ObjectIds
+      servicesProvided: servicesArray,
+      description: description ? description.trim() : "",
+      experience: experience ? parseInt(experience) : 0,
+      hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0,
+      businessServiceDays,
+      businessHours,
+      isApproved: process.env.AUTO_APPROVE_PROVIDERS === "true" || false,
+      isVerified: false,
+    });
+
+    console.log("Provider object before save:", serviceProvider);
+
+    await serviceProvider.save();
+
+    // Verify what was actually saved
+    const savedProvider = await ServiceProvider.findById(serviceProvider._id);
+    console.log(
+      "Provider after save - profileImage:",
+      savedProvider.profileImage
+    );
+    console.log(
+      "Provider after save - businessLogo:",
+      savedProvider.businessLogo
+    );
+    console.log(
+      "Provider after save - servicesProvided:",
+      savedProvider.servicesProvided
+    );
+
+    const token = generateToken(serviceProvider._id);
+
+    // CHANGED: No need to populate since we're storing names directly
+    console.log("=== PROVIDER REGISTRATION SUCCESS ===");
+
+    res.status(201).json({
+      success: true,
+      message: "Service provider registered successfully",
+      data: {
+        token,
+        user: {
+          id: serviceProvider._id,
+          firstName: serviceProvider.firstName,
+          lastName: serviceProvider.lastName,
+          email: serviceProvider.email,
+          phone: serviceProvider.phone,
+          profileImage: serviceProvider.profileImage,
+          role: serviceProvider.role,
+          isApproved: serviceProvider.isApproved,
+          isVerified: serviceProvider.isVerified,
+          isActive: serviceProvider.isActive,
+        },
+        providerProfile: {
+          businessName: serviceProvider.businessNameRegistered,
+          providerRole: serviceProvider.providerRole,
+          servicesProvided: serviceProvider.servicesProvided, // Now contains names directly
+          businessLogo: serviceProvider.businessLogo,
+          businessServiceDays: serviceProvider.businessServiceDays,
+          businessHours: serviceProvider.businessHours,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Provider registration error:", error);
+
+    // Handle specific error types
+    if (error.name === "ValidationError") {
+      const errors = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors,
+      });
+    }
+
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: "Email already exists",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Service provider registration failed",
+      error:
+        process.env.NODE_ENV === "development"
+          ? error.message
+          : "Internal server error",
+    });
+  }
 };
 
-// Login (works for all roles)
 const login = async (req, res) => {
-    try {
-        const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-        // Check in all models
-        let user = await Customer.findOne({ email });
-        if (!user) {
-            try {
-                user = await ServiceProvider.findOne({ email });
-            } catch (error) {
-                console.warn('ServiceProvider login check failed:', error.message);
-            }
-        }
-        if (!user) {
-            try {
-                user = await Admin.findOne({ email });
-            } catch (error) {
-                console.warn('Admin login check failed:', error.message);
-            }
-        }
-
-        if (!user) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
-        }
-
-        // Check password
-        const isMatch = await user.comparePassword(password);
-        if (!isMatch) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
-        }
-
-        // Check if user is active
-        if (!user.isActive) {
-            return res.status(400).json({
-                success: false,
-                message: 'Account is deactivated'
-            });
-        }
-
-        // Generate token
-        const token = generateToken(user._id);
-
-        // Prepare response data
-        let userData = {
-            id: user._id,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            email: user.email,
-            role: user.role,
-            profileImage: user.profileImage,
-            isVerified: user.isVerified
-        };
-
-        // Add role-specific data
-        if (user.role === 'provider') {
-            userData.providerProfile = {
-                businessName: user.businessNameRegistered,
-                providerRole: user.providerRole,
-                servicesProvided: user.servicesProvided,
-                isApproved: user.isApproved,
-                approvalStatus: user.approvalStatus, // ADD THIS
-                rating: user.rating,
-                businessLogo: user.businessLogo
-            };
-            
-            // Add approval status to main user object for provider
-            userData.isApproved = user.isApproved;
-            userData.approvalStatus = user.approvalStatus;
-        } else if (user.role === 'customer') {
-            userData.address = user.address;
-        } else if (user.role === 'admin') {
-            userData.adminRole = user.adminRole;
-            userData.permissions = user.permissions;
-        }
-
-        res.json({
-            success: true,
-            message: 'Login successful',
-            data: {
-                token,
-                user: userData
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Login failed',
-            error: error.message
-        });
+    let user = await Customer.findOne({ email });
+    if (!user) {
+      try {
+        user = await ServiceProvider.findOne({ email });
+      } catch (error) {
+        console.warn("ServiceProvider login check failed:", error.message);
+      }
     }
+    if (!user) {
+      try {
+        user = await Admin.findOne({ email });
+      } catch (error) {
+        console.warn("Admin login check failed:", error.message);
+      }
+    }
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid credentials",
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Account is deactivated",
+      });
+    }
+
+    const token = generateToken(user._id);
+
+    let userData = {
+      id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      profileImage: user.profileImage,
+      isVerified: user.isVerified,
+    };
+
+    if (user.role === "provider") {
+      userData.providerProfile = {
+        businessName: user.businessNameRegistered,
+        providerRole: user.providerRole,
+        servicesProvided: user.servicesProvided,
+        isApproved: user.isApproved,
+        approvalStatus: user.approvalStatus,
+        rating: user.rating,
+        businessLogo: user.businessLogo,
+        businessServiceDays: user.businessServiceDays,
+        businessHours: user.businessHours,
+      };
+
+      userData.isApproved = user.isApproved;
+      userData.approvalStatus = user.approvalStatus;
+    } else if (user.role === "customer") {
+      userData.address = user.address;
+    } else if (user.role === "admin") {
+      userData.adminRole = user.adminRole;
+      userData.permissions = user.permissions;
+    }
+
+    res.json({
+      success: true,
+      message: "Login successful",
+      data: {
+        token,
+        user: userData,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Login failed",
+      error: error.message,
+    });
+  }
 };
 
-// Get current user (works for all roles)
 const getMe = async (req, res) => {
-    try {
-        let userData;
+  try {
+    let userData;
 
-        // Get user based on role
-        if (req.user.role === 'customer') {
-            userData = await Customer.findById(req.user._id).select('-password');
-        } else if (req.user.role === 'provider') {
-            userData = await ServiceProvider.findById(req.user._id).select('-password');
-        } else if (req.user.role === 'admin') {
-            userData = await Admin.findById(req.user._id).select('-password');
-        }
-
-        res.json({
-            success: true,
-            data: {
-                user: userData
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Server error',
-            error: error.message
-        });
+    if (req.user.role === "customer") {
+      userData = await Customer.findById(req.user._id).select("-password");
+    } else if (req.user.role === "provider") {
+      userData = await ServiceProvider.findById(req.user._id).select(
+        "-password"
+      );
+    } else if (req.user.role === "admin") {
+      userData = await Admin.findById(req.user._id).select("-password");
     }
+
+    res.json({
+      success: true,
+      data: {
+        user: userData,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
+  }
 };
 
-// Admin route to approve providers (for testing)
 const approveProvider = async (req, res) => {
-    try {
-        const { providerId } = req.params;
+  try {
+    const { providerId } = req.params;
 
-        const provider = await ServiceProvider.findById(providerId);
-        if (!provider) {
-            return res.status(404).json({
-                success: false,
-                message: 'Provider not found'
-            });
-        }
-
-        provider.isApproved = true;
-        provider.approvalStatus = 'approved';
-        await provider.save();
-
-        res.json({
-            success: true,
-            message: 'Provider approved successfully',
-            data: {
-                provider: {
-                    id: provider._id,
-                    email: provider.email,
-                    businessName: provider.businessNameRegistered,
-                    isApproved: provider.isApproved,
-                    approvalStatus: provider.approvalStatus
-                }
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Approval failed',
-            error: error.message
-        });
+    const provider = await ServiceProvider.findById(providerId);
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
     }
+
+    provider.isApproved = true;
+    provider.approvalStatus = "approved";
+    await provider.save();
+
+    res.json({
+      success: true,
+      message: "Provider approved successfully",
+      data: {
+        provider: {
+          id: provider._id,
+          email: provider.email,
+          businessName: provider.businessNameRegistered,
+          isApproved: provider.isApproved,
+          approvalStatus: provider.approvalStatus,
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Approval failed",
+      error: error.message,
+    });
+  }
 };
 
-// Route to check provider approval status
 const checkProviderStatus = async (req, res) => {
-    try {
-        const provider = await ServiceProvider.findById(req.user._id);
-        
-        if (!provider) {
-            return res.status(404).json({
-                success: false,
-                message: 'Provider not found'
-            });
-        }
+  try {
+    const provider = await ServiceProvider.findById(req.user._id);
 
-        res.json({
-            success: true,
-            data: {
-                isApproved: provider.isApproved,
-                approvalStatus: provider.approvalStatus,
-                isActive: provider.isActive,
-                isVerified: provider.isVerified,
-                canSubmitVerification: provider.isApproved && provider.approvalStatus === 'approved'
-            }
-        });
-
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error checking provider status',
-            error: error.message
-        });
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
     }
+
+    res.json({
+      success: true,
+      data: {
+        isApproved: provider.isApproved,
+        approvalStatus: provider.approvalStatus,
+        isActive: provider.isActive,
+        isVerified: provider.isVerified,
+        canSubmitVerification:
+          provider.isApproved && provider.approvalStatus === "approved",
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error checking provider status",
+      error: error.message,
+    });
+  }
 };
 
-// Get all providers (for admin)
 const getAllProviders = async (req, res) => {
-    try {
-        const providers = await ServiceProvider.find().select('-password');
-        
-        res.json({
-            success: true,
-            data: {
-                providers: providers.map(provider => ({
-                    id: provider._id,
-                    firstName: provider.firstName,
-                    lastName: provider.lastName,
-                    email: provider.email,
-                    businessName: provider.businessNameRegistered,
-                    isApproved: provider.isApproved,
-                    approvalStatus: provider.approvalStatus,
-                    isActive: provider.isActive,
-                    createdAt: provider.createdAt
-                }))
-            }
-        });
+  try {
+    const providers = await ServiceProvider.find().select("-password");
 
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching providers',
-            error: error.message
-        });
-    }
+    res.json({
+      success: true,
+      data: {
+        providers: providers.map((provider) => ({
+          id: provider._id,
+          firstName: provider.firstName,
+          lastName: provider.lastName,
+          email: provider.email,
+          businessName: provider.businessNameRegistered,
+          isApproved: provider.isApproved,
+          approvalStatus: provider.approvalStatus,
+          isActive: provider.isActive,
+          createdAt: provider.createdAt,
+        })),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching providers",
+      error: error.message,
+    });
+  }
 };
 
-// Export all functions
 module.exports = {
-    selectRole,
-    registerCustomer,
-    registerProvider,
-    login,
-    getMe,
-    approveProvider,
-    checkProviderStatus,
-    getAllProviders
+  registerCustomer,
+  registerProvider,
+  login,
+  getMe,
+  approveProvider,
+  checkProviderStatus,
+  getAllProviders,
 };

@@ -1,39 +1,89 @@
-const express = require('express');
+const express = require("express");
+const multer = require("multer");
 const {
-    registerCustomer,
-    registerProvider,
-    login,
-    getMe
-} = require('../controllers/authController');
-const { uploadProfileImage, uploadBusinessLogo } = require('../config/cloudinary');
-const { auth } = require('../middleware/auth');
+  registerCustomer,
+  registerProvider,
+  login,
+  getMe,
+  approveProvider,
+  checkProviderStatus,
+  getAllProviders,
+} = require("../controllers/authController");
+const { auth } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Remove this line:
-// router.post('/select-role', selectRole);
+// CUSTOMER UPLOAD - Completely isolated
+const customerStorage = multer.memoryStorage();
+const customerUpload = multer({
+  storage: customerStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    console.log("Customer upload - Fieldname:", file.fieldname);
+    if (
+      file.fieldname === "profileImage" &&
+      file.mimetype.startsWith("image/")
+    ) {
+      cb(null, true);
+    } else {
+      cb(
+        new Error(
+          "Customer: Only profileImage field with image files are allowed!"
+        ),
+        false
+      );
+    }
+  },
+});
 
-// Customer registration with file upload
+// PROVIDER UPLOAD - Completely isolated with different storage
+const providerStorage = multer.memoryStorage();
+const providerUpload = multer({
+  storage: providerStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    console.log("Provider upload - Fieldname:", file.fieldname);
+    const allowedFields = ["profileImage", "businessLogo"];
+    if (
+      allowedFields.includes(file.fieldname) &&
+      file.mimetype.startsWith("image/")
+    ) {
+      cb(null, true);
+    } else {
+      cb(
+        new Error(
+          `Provider: Only ${allowedFields.join(
+            ", "
+          )} fields with image files are allowed!`
+        ),
+        false
+      );
+    }
+  },
+});
+
+// Public routes
 router.post(
-    '/register/customer',
-    uploadProfileImage.single('profileImage'),
-    registerCustomer
+  "/register/customer",
+  customerUpload.single("profileImage"),
+  registerCustomer
 );
 
-// Service Provider registration with file uploads
 router.post(
-    '/register/provider',
-    uploadBusinessLogo.fields([
-        { name: 'profileImage', maxCount: 1 },
-        { name: 'businessLogo', maxCount: 1 }
-    ]),
-    registerProvider
+  "/register/provider",
+  providerUpload.fields([
+    { name: "profileImage", maxCount: 1 },
+    { name: "businessLogo", maxCount: 1 },
+  ]),
+  registerProvider
 );
 
-// Login
-router.post('/login', login);
+router.post("/login", login);
 
-// Get current user
-router.get('/me', auth, getMe);
+// Protected routes
+router.get("/me", auth, getMe);
+router.get("/provider/status", auth, checkProviderStatus);
+router.get("/providers", auth, getAllProviders);
+router.patch("/provider/approve/:providerId", auth, approveProvider);
 
 module.exports = router;
