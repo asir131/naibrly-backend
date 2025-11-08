@@ -76,28 +76,9 @@ const serviceProviderSchema = new mongoose.Schema({
     },
    
     
-    servicesProvided: [{
-        type: String,
-        enum: [
-            'IKEA Assembly',
-            'TV Mounting',
-            'Furniture Assembly',
-            'General Mounting',
-            'Truck Assisted Help Moving',
-            'Help Moving',
-            'Cleaning',
-            'Door, Cabinet, & Furniture Repair',
-            'Heavy Lifting & Loading',
-            'Electrical help',
-            'Plumbing help',
-            'Painting',
-            'Carpentry',
-            'Appliance Installation',
-            'Home Organization',
-            'Home Repairs & Maintenance',
-            'Cleaning & Organization', 
-            'Renovations & Upgrades'
-        ]
+   servicesProvided: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Service'
     }],
     
     description: {

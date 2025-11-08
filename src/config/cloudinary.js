@@ -9,42 +9,6 @@ cloudinary.config({
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// Configure storage for profile images
-const profileImageStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/profiles',
-        format: async (req, file) => 'png',
-        public_id: (req, file) => {
-            const timestamp = Date.now();
-            return `profile_${timestamp}`;
-        },
-        transformation: [
-            { width: 500, height: 500, crop: 'limit' },
-            { quality: 'auto' },
-            { format: 'png' }
-        ]
-    }
-});
-
-// Configure storage for business logos
-const businessLogoStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/business-logos',
-        format: async (req, file) => 'png',
-        public_id: (req, file) => {
-            const timestamp = Date.now();
-            return `business_logo_${timestamp}`;
-        },
-        transformation: [
-            { width: 300, height: 300, crop: 'limit' },
-            { quality: 'auto' },
-            { format: 'png' }
-        ]
-    }
-});
-
 // File filter for images only
 const fileFilter = (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -54,12 +18,75 @@ const fileFilter = (req, file, cb) => {
     }
 };
 
+// Configure storage for profile images
+const profileImageStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'naibrly/profiles',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [
+            { width: 500, height: 500, crop: 'limit' },
+            { quality: 'auto' }
+        ]
+    }
+});
+
+// Configure storage for business logos
+const businessLogoStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'naibrly/business-logos',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [
+            { width: 300, height: 300, crop: 'limit' },
+            { quality: 'auto' }
+        ]
+    }
+});
+
+// Configure storage for category type images
+const categoryTypeImageStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'naibrly/category-types',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        transformation: [
+            { width: 600, height: 400, crop: 'limit' },
+            { quality: 'auto' }
+        ]
+    }
+});
+
+const insuranceDocumentStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'naibrly/insurance-documents',
+        format: async (req, file) => {
+            if (file.mimetype === 'application/pdf') return 'pdf';
+            return 'png';
+        },
+        public_id: (req, file) => {
+            const userId = req.user?._id || 'unknown';
+            const timestamp = Date.now();
+            return `insurance_${userId}_${timestamp}`;
+        },
+        transformation: file => {
+            if (file.mimetype === 'application/pdf') {
+                return [];
+            }
+            return [
+                { quality: 'auto' }
+            ];
+        }
+    }
+});
+
 // Multer upload configurations
 const uploadProfileImage = multer({
     storage: profileImageStorage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
+        fileSize: 5 * 1024 * 1024
     }
 });
 
@@ -67,7 +94,38 @@ const uploadBusinessLogo = multer({
     storage: businessLogoStorage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
+        fileSize: 5 * 1024 * 1024
+    }
+});
+
+// Category type image upload - SIMPLIFIED
+// const uploadCategoryTypeImage = multer({
+//     storage: categoryTypeImageStorage,
+//     fileFilter: fileFilter,
+//     limits: {
+//         fileSize: 5 * 1024 * 1024
+//     }
+// });
+
+const uploadInsuranceDocument = multer({
+    storage: insuranceDocumentStorage,
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
+            cb(null, true);
+        } else {
+            cb(new Error('Only image files and PDFs are allowed!'), false);
+        }
+    },
+    limits: {
+        fileSize: 10 * 1024 * 1024
+    }
+});
+
+const uploadProviderFiles = multer({
+    storage: profileImageStorage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 5 * 1024 * 1024
     }
 });
 
@@ -82,63 +140,12 @@ const deleteImageFromCloudinary = async (publicId) => {
     }
 };
 
-const insuranceDocumentStorage = new CloudinaryStorage({
-    cloudinary: cloudinary,
-    params: {
-        folder: 'naibrly/insurance-documents',
-        format: async (req, file) => {
-            // Accept both images and PDFs
-            if (file.mimetype === 'application/pdf') return 'pdf';
-            return 'png';
-        },
-        public_id: (req, file) => {
-            const userId = req.user?._id || 'unknown';
-            const timestamp = Date.now();
-            return `insurance_${userId}_${timestamp}`;
-        },
-        transformation: file => {
-            if (file.mimetype === 'application/pdf') {
-                return []; // No transformation for PDFs
-            }
-            return [
-                { quality: 'auto' },
-                { format: 'png' }
-            ];
-        }
-    }
-});
-
-// File filter for insurance documents (images and PDFs)
-const insuranceFileFilter = (req, file, cb) => {
-    if (file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf') {
-        cb(null, true);
-    } else {
-        cb(new Error('Only image files and PDFs are allowed!'), false);
-    }
-};
-
-// Multer upload configuration for insurance documents
-const uploadInsuranceDocument = multer({
-    storage: insuranceDocumentStorage,
-    fileFilter: insuranceFileFilter,
-    limits: {
-        fileSize: 10 * 1024 * 1024 // 10MB limit for documents
-    }
-});
-
-const uploadProviderFiles = multer({
-    storage: profileImageStorage, // Use the same storage for both
-    fileFilter: fileFilter,
-    limits: {
-        fileSize: 5 * 1024 * 1024 // 5MB limit
-    }
-});
-
 module.exports = {
     cloudinary,
     uploadProfileImage,
     uploadBusinessLogo,
-    uploadInsuranceDocument, // Add this
+    // uploadCategoryTypeImage,
+    uploadInsuranceDocument,
     deleteImageFromCloudinary,
     uploadProviderFiles
 };

@@ -6,7 +6,7 @@ const path = require('path');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
 const { initializeAdmin } = require('./controllers/adminController');
-
+const { initializeDefaultData } = require('./controllers/categoryController');
 // Load env vars
 dotenv.config();
 
@@ -30,6 +30,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Initialize admin user on server start
 initializeAdmin();
+initializeDefaultData();
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
@@ -41,6 +42,11 @@ app.use('/api/service-requests', require('./routes/serviceRequests'));
 app.use('/api/auth/password-reset', require('./routes/passwordReset'));
 app.use('/api/verify-information', require('./routes/verification'));
 app.use('/api/upload', require('./routes/upload'));
+
+
+// category 
+app.use('/api/categories', require('./routes/categories'));
+
 
 // Test routes
 app.get('/health', (_req, res) => {
