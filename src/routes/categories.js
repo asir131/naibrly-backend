@@ -1,38 +1,41 @@
-const express = require('express');
+const express = require("express");
 const {
-    getAllCategories,
-    createCategoryTypeWithServices,
-    getAllServices,
-    initializeDefaultData
-} = require('../controllers/categoryController');
-const { uploadCategoryTypeImage } = require('../config/categoryCloudinary');
-const { auth, authorize } = require('../middleware/auth');
+  getAllCategories,
+  createCategoryTypeWithServices,
+  getAllServices,
+  initializeDefaultData,
+  addServiceToCategoryType,
+} = require("../controllers/categoryController");
+const { uploadCategoryTypeImage } = require("../config/categoryCloudinary");
+const { auth, authorize } = require("../middleware/auth");
 
 const router = express.Router();
 
 // Initialize categories on server start
 
-
 // Public routes
-router.get('/services', getAllServices);
+router.get("/services", getAllServices);
 
 // Admin routes
-router.get('/', auth, authorize('admin'), getAllCategories);
+router.get("/", auth, authorize("admin"), getAllCategories);
+
+// Add new service to existing category type
+router.post("/add-service", auth, authorize("admin"), addServiceToCategoryType);
 
 // SIMPLE AND CLEAN - This will work
 router.post(
-    '/create',
-    auth,
-    authorize('admin'),
-    uploadCategoryTypeImage.single('image'), // Field name is 'image'
-    createCategoryTypeWithServices
+  "/create",
+  auth,
+  authorize("admin"),
+  uploadCategoryTypeImage.single("image"), // Field name is 'image'
+  createCategoryTypeWithServices
 );
-// router.post('/test-upload', 
+// router.post('/test-upload',
 //     uploadCategoryTypeImage.single('image'),
 //     (req, res) => {
 //         console.log('Test upload - File:', req.file);
 //         console.log('Test upload - Body:', req.body);
-        
+
 //         res.json({
 //             success: true,
 //             message: 'Upload test successful',

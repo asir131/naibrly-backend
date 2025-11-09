@@ -422,6 +422,119 @@ const createCategoryTypeWithServices = async (req, res) => {
   }
 };
 
+// Add new service to existing category type
+const addServiceToCategoryType = async (req, res) => {
+  try {
+    console.log("=== ADD SERVICE TO CATEGORY TYPE ===");
+    console.log("Body:", req.body);
+
+    const { categoryTypeName, serviceName, serviceDescription } = req.body;
+
+    // Validation
+    if (!categoryTypeName || !serviceName) {
+      return res.status(400).json({
+        success: false,
+        message: "Category type name and service name are required",
+      });
+    }
+
+    // Find the category type
+    const categoryType = await CategoryType.findOne({
+      name: categoryTypeName.trim(),
+    }).populate("category");
+
+    if (!categoryType) {
+      return res.status(404).json({
+        success: false,
+        message: "Category type not found",
+      });
+    }
+
+    console.log("🔍 Found category type:", {
+      id: categoryType._id,
+      name: categoryType.name,
+      category: categoryType.category?.name,
+    });
+
+    // Check if service already exists in this category type
+    const existingService = await Service.findOne({
+      name: serviceName.trim(),
+      categoryType: categoryType._id,
+    });
+
+    if (existingService) {
+      return res.status(400).json({
+        success: false,
+        message: `Service "${serviceName}" already exists in "${categoryTypeName}"`,
+      });
+    }
+
+    // Check if service exists globally (in any category type)
+    const globalServiceExists = await Service.findOne({
+      name: serviceName.trim(),
+    });
+
+    if (globalServiceExists) {
+      return res.status(400).json({
+        success: false,
+        message: `Service "${serviceName}" already exists in the system. Please use a different name.`,
+      });
+    }
+
+    // Create new service
+    const newService = new Service({
+      name: serviceName.trim(),
+      categoryType: categoryType._id,
+      description: serviceDescription
+        ? serviceDescription.trim()
+        : `${serviceName.trim()} service`,
+      isActive: true,
+    });
+
+    await newService.save();
+
+    // Populate for response
+    await newService.populate({
+      path: "categoryType",
+      populate: {
+        path: "category",
+      },
+    });
+
+    console.log("✅ New service created:", newService);
+
+    res.status(201).json({
+      success: true,
+      message: `Service "${serviceName}" added successfully to "${categoryTypeName}"`,
+      data: {
+        service: newService,
+        categoryType: {
+          id: categoryType._id,
+          name: categoryType.name,
+          category: categoryType.category,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Add service to category type error:", error);
+
+    if (error.name === "ValidationError") {
+      const errors = Object.values(error.errors).map((err) => err.message);
+      return res.status(400).json({
+        success: false,
+        message: "Validation failed",
+        errors: errors,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Failed to add service",
+      error: error.message,
+    });
+  }
+};
+
 // Export all functions properly
 module.exports = {
   initializeDefaultData,
@@ -430,4 +543,5 @@ module.exports = {
   getAllServices,
   getInitializationStatus,
   createCategoryTypeWithServices,
+  addServiceToCategoryType,
 };
