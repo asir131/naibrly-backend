@@ -63,9 +63,24 @@ const serviceProviderSchema = new mongoose.Schema(
       enum: ["owner", "manager", "employee"],
       required: [true, "Provider role is required"],
     },
+    // Updated businessAddress structure
     businessAddress: {
-      type: String,
-      required: [true, "Business address is required"],
+      street: {
+        type: String,
+        required: [true, "Business street address is required"],
+      },
+      city: {
+        type: String,
+        required: [true, "Business city is required"],
+      },
+      state: {
+        type: String,
+        required: [true, "Business state is required"],
+      },
+      zipCode: {
+        type: String,
+        required: [true, "Business ZIP code is required"],
+      },
     },
     businessPhone: {
       type: String,
@@ -75,7 +90,6 @@ const serviceProviderSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-
     servicesProvided: [
       {
         type: String,
@@ -115,6 +129,12 @@ const serviceProviderSchema = new mongoose.Schema(
     hourlyRate: {
       type: Number,
       min: 0,
+    },
+    // Add service pricing for bundles
+    servicePricing: {
+      type: Map,
+      of: Number,
+      default: {},
     },
     isApproved: {
       type: Boolean,

@@ -214,7 +214,11 @@ const registerProvider = async (req, res) => {
       businessNameRegistered,
       businessNameDBA,
       providerRole,
-      businessAddress,
+      // Individual address fields instead of businessAddress object
+      businessAddressStreet,
+      businessAddressCity,
+      businessAddressState,
+      businessAddressZipCode,
       businessPhone,
       website,
       servicesProvided,
@@ -235,12 +239,29 @@ const registerProvider = async (req, res) => {
       !phone ||
       !businessNameRegistered ||
       !providerRole ||
-      !businessAddress ||
+      !businessAddressStreet ||
+      !businessAddressCity ||
+      !businessAddressState ||
+      !businessAddressZipCode ||
       !businessPhone
     ) {
       return res.status(400).json({
         success: false,
         message: "Please fill in all required fields",
+        missingFields: {
+          firstName: !firstName,
+          lastName: !lastName,
+          email: !email,
+          password: !password,
+          phone: !phone,
+          businessNameRegistered: !businessNameRegistered,
+          providerRole: !providerRole,
+          businessAddressStreet: !businessAddressStreet,
+          businessAddressCity: !businessAddressCity,
+          businessAddressState: !businessAddressState,
+          businessAddressZipCode: !businessAddressZipCode,
+          businessPhone: !businessPhone,
+        },
       });
     }
 
@@ -293,7 +314,7 @@ const registerProvider = async (req, res) => {
           });
         }
 
-        // CHANGED: Save service names instead of IDs
+        // Save service names instead of IDs
         servicesArray = serviceNames;
       }
     }
@@ -311,14 +332,14 @@ const registerProvider = async (req, res) => {
     if (!businessServiceDays.start || !businessServiceDays.end) {
       return res.status(400).json({
         success: false,
-        message: "Business service start and end are required",
+        message: "Business service start and end days are required",
       });
     }
 
     if (!businessHours.start || !businessHours.end) {
       return res.status(400).json({
         success: false,
-        message: "Business hours start and end are required",
+        message: "Business hours start and end times are required",
       });
     }
 
@@ -382,6 +403,7 @@ const registerProvider = async (req, res) => {
       }
     }
 
+    // Create the service provider with individual address fields
     const serviceProvider = new ServiceProvider({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
@@ -393,10 +415,16 @@ const registerProvider = async (req, res) => {
       businessNameRegistered: businessNameRegistered.trim(),
       businessNameDBA: businessNameDBA ? businessNameDBA.trim() : "",
       providerRole,
-      businessAddress: businessAddress.trim(),
+      // Use individual address fields to create businessAddress object
+      businessAddress: {
+        street: businessAddressStreet.trim(),
+        city: businessAddressCity.trim(),
+        state: businessAddressState.trim(),
+        zipCode: businessAddressZipCode.trim(),
+      },
       businessPhone: businessPhone.trim(),
       website: website ? website.trim() : "",
-      // CHANGED: Store service names directly instead of ObjectIds
+      // Store service names directly instead of ObjectIds
       servicesProvided: servicesArray,
       description: description ? description.trim() : "",
       experience: experience ? parseInt(experience) : 0,
@@ -425,10 +453,13 @@ const registerProvider = async (req, res) => {
       "Provider after save - servicesProvided:",
       savedProvider.servicesProvided
     );
+    console.log(
+      "Provider after save - businessAddress:",
+      savedProvider.businessAddress
+    );
 
     const token = generateToken(serviceProvider._id);
 
-    // CHANGED: No need to populate since we're storing names directly
     console.log("=== PROVIDER REGISTRATION SUCCESS ===");
 
     res.status(201).json({
@@ -451,8 +482,9 @@ const registerProvider = async (req, res) => {
         providerProfile: {
           businessName: serviceProvider.businessNameRegistered,
           providerRole: serviceProvider.providerRole,
-          servicesProvided: serviceProvider.servicesProvided, // Now contains names directly
+          servicesProvided: serviceProvider.servicesProvided,
           businessLogo: serviceProvider.businessLogo,
+          businessAddress: serviceProvider.businessAddress,
           businessServiceDays: serviceProvider.businessServiceDays,
           businessHours: serviceProvider.businessHours,
         },

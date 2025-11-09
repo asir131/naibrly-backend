@@ -8,7 +8,7 @@ const connectDB = require("./config/database");
 const { initializeAdmin } = require("./controllers/adminController");
 const { initializeDefaultData } = require("./controllers/categoryController");
 const { uploadProfileImage } = require("./config/cloudinary"); // Add this import
-
+const { initializeBundleSettings } = require("./controllers/bundleController");
 // Load env vars
 dotenv.config();
 
@@ -35,6 +35,7 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 // Initialize admin user on server start
 initializeAdmin();
 initializeDefaultData();
+initializeBundleSettings();
 
 // Debug route for testing uploads
 app.post(
@@ -63,6 +64,12 @@ app.use("/api/upload", require("./routes/upload"));
 
 // category
 app.use("/api/categories", require("./routes/categories"));
+
+// Add after other route imports
+app.use("/api/bundles", require("./routes/bundles"));
+app.use("/api/bundle-settings", require("./routes/bundleSettings"));
+
+// Initialize bundle settings on server start
 
 // Test routes
 app.get("/health", (_req, res) => {
