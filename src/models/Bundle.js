@@ -2,21 +2,16 @@ const mongoose = require("mongoose");
 
 const bundleSchema = new mongoose.Schema(
   {
-    // Bundle creator
     creator: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Customer",
       required: true,
     },
-
-    // Service provider who accepted the bundle (initially null)
     provider: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ServiceProvider",
       default: null,
     },
-
-    // Bundle details
     title: {
       type: String,
       required: true,
@@ -26,8 +21,6 @@ const bundleSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-
-    // Service selection
     category: {
       type: String,
       required: true,
@@ -48,8 +41,6 @@ const bundleSchema = new mongoose.Schema(
         },
       },
     ],
-
-    // Scheduling
     serviceDate: {
       type: Date,
       required: true,
@@ -62,8 +53,6 @@ const bundleSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-
-    // Location
     zipCode: {
       type: String,
       required: true,
@@ -74,8 +63,6 @@ const bundleSchema = new mongoose.Schema(
       state: String,
       aptSuite: String,
     },
-
-    // Bundle capacity (set by admin)
     maxParticipants: {
       type: Number,
       default: 5,
@@ -86,8 +73,6 @@ const bundleSchema = new mongoose.Schema(
       type: Number,
       default: 1,
     },
-
-    // Participants
     participants: [
       {
         customer: {
@@ -100,15 +85,13 @@ const bundleSchema = new mongoose.Schema(
         },
       },
     ],
-
-    // Pricing (calculated automatically)
     totalPrice: {
       type: Number,
       required: true,
     },
     bundleDiscount: {
       type: Number,
-      default: 5, // Set by admin
+      default: 5,
     },
     finalPrice: {
       type: Number,
@@ -118,8 +101,6 @@ const bundleSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-
-    // Status
     status: {
       type: String,
       enum: [
@@ -133,8 +114,6 @@ const bundleSchema = new mongoose.Schema(
       ],
       default: "pending",
     },
-
-    // Provider responses
     providerOffers: [
       {
         provider: {
@@ -153,8 +132,6 @@ const bundleSchema = new mongoose.Schema(
         },
       },
     ],
-
-    // Timestamps
     expiresAt: {
       type: Date,
       required: true,
@@ -165,7 +142,6 @@ const bundleSchema = new mongoose.Schema(
   }
 );
 
-// Index for efficient queries
 bundleSchema.index({ zipCode: 1, status: 1 });
 bundleSchema.index({ category: 1, status: 1 });
 bundleSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });

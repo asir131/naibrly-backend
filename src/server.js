@@ -68,6 +68,7 @@ app.use("/api/categories", require("./routes/categories"));
 // Add after other route imports
 app.use("/api/bundles", require("./routes/bundles"));
 app.use("/api/bundle-settings", require("./routes/bundleSettings"));
+app.use("/api/providers", require("./routes/providers"));
 
 // Initialize bundle settings on server start
 

@@ -63,7 +63,6 @@ const serviceProviderSchema = new mongoose.Schema(
       enum: ["owner", "manager", "employee"],
       required: [true, "Provider role is required"],
     },
-    // Updated businessAddress structure
     businessAddress: {
       street: {
         type: String,
@@ -104,6 +103,14 @@ const serviceProviderSchema = new mongoose.Schema(
       type: Number,
       min: 0,
     },
+    // Bundle capacity set by provider
+    maxBundleCapacity: {
+      type: Number,
+      default: 5,
+      min: 1,
+      max: 10,
+      required: true,
+    },
     businessServiceDays: {
       start: {
         type: String,
@@ -130,7 +137,6 @@ const serviceProviderSchema = new mongoose.Schema(
       type: Number,
       min: 0,
     },
-    // Add service pricing for bundles
     servicePricing: {
       type: Map,
       of: Number,

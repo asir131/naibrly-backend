@@ -2,19 +2,12 @@ const mongoose = require("mongoose");
 
 const bundleSettingsSchema = new mongoose.Schema(
   {
-    // Bundle capacity set by admin
-    maxParticipants: {
-      type: Number,
-      default: 3,
-      min: 1,
-      max: 5,
-    },
-    // Bundle discount set by admin
     bundleDiscount: {
       type: Number,
       default: 5,
       min: 0,
       max: 50,
+      required: true,
     },
     bundleExpiryHours: {
       type: Number,

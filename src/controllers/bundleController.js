@@ -208,6 +208,7 @@ exports.createBundle = async (req, res) => {
 };
 
 // Provider accepts a bundle directly
+// Provider accepts a bundle directly
 exports.providerAcceptBundle = async (req, res) => {
   try {
     const { bundleId } = req.params;
@@ -270,10 +271,19 @@ exports.providerAcceptBundle = async (req, res) => {
       });
     }
 
+    // ✅ Use provider's maxBundleCapacity instead of global setting
+    const providerMaxCapacity = provider.maxBundleCapacity || 5;
+
+    // Update bundle with provider's capacity
+    bundle.maxParticipants = providerMaxCapacity;
+    bundle.pricePerPerson = bundle.finalPrice / providerMaxCapacity;
+
     // Add provider offer and automatically accept it
     bundle.providerOffers.push({
       provider: req.user._id,
-      message: message || `I accept this bundle for $${bundle.finalPrice}`,
+      message:
+        message ||
+        `I accept this bundle for $${bundle.finalPrice} (Capacity: ${providerMaxCapacity} people)`,
       status: "accepted",
     });
 
@@ -303,12 +313,14 @@ exports.providerAcceptBundle = async (req, res) => {
           id: provider._id,
           businessName: provider.businessNameRegistered,
           rating: provider.rating,
+          maxBundleCapacity: providerMaxCapacity,
         },
         pricing: {
           totalPrice: bundle.totalPrice,
           bundleDiscount: `${bundle.bundleDiscount}%`,
           finalPrice: bundle.finalPrice,
           pricePerPerson: bundle.pricePerPerson,
+          maxParticipants: providerMaxCapacity,
         },
       },
     });
