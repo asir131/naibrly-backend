@@ -214,7 +214,7 @@ const registerProvider = async (req, res) => {
       businessNameRegistered,
       businessNameDBA,
       providerRole,
-      // Individual address fields instead of businessAddress object
+      // Individual address fields - now optional
       businessAddressStreet,
       businessAddressCity,
       businessAddressState,
@@ -231,6 +231,7 @@ const registerProvider = async (req, res) => {
       businessHoursEnd,
     } = req.body;
 
+    // Validation - removed address fields from required
     if (
       !firstName ||
       !lastName ||
@@ -239,10 +240,6 @@ const registerProvider = async (req, res) => {
       !phone ||
       !businessNameRegistered ||
       !providerRole ||
-      !businessAddressStreet ||
-      !businessAddressCity ||
-      !businessAddressState ||
-      !businessAddressZipCode ||
       !businessPhone
     ) {
       return res.status(400).json({
@@ -256,10 +253,6 @@ const registerProvider = async (req, res) => {
           phone: !phone,
           businessNameRegistered: !businessNameRegistered,
           providerRole: !providerRole,
-          businessAddressStreet: !businessAddressStreet,
-          businessAddressCity: !businessAddressCity,
-          businessAddressState: !businessAddressState,
-          businessAddressZipCode: !businessAddressZipCode,
           businessPhone: !businessPhone,
         },
       });
@@ -403,7 +396,17 @@ const registerProvider = async (req, res) => {
       }
     }
 
-    // Create the service provider with individual address fields
+    // Create business address object only if address fields are provided
+    const businessAddress = {};
+    if (businessAddressStreet)
+      businessAddress.street = businessAddressStreet.trim();
+    if (businessAddressCity) businessAddress.city = businessAddressCity.trim();
+    if (businessAddressState)
+      businessAddress.state = businessAddressState.trim();
+    if (businessAddressZipCode)
+      businessAddress.zipCode = businessAddressZipCode.trim();
+
+    // Create the service provider
     const serviceProvider = new ServiceProvider({
       firstName: firstName.trim(),
       lastName: lastName.trim(),
@@ -415,16 +418,10 @@ const registerProvider = async (req, res) => {
       businessNameRegistered: businessNameRegistered.trim(),
       businessNameDBA: businessNameDBA ? businessNameDBA.trim() : "",
       providerRole,
-      // Use individual address fields to create businessAddress object
-      businessAddress: {
-        street: businessAddressStreet.trim(),
-        city: businessAddressCity.trim(),
-        state: businessAddressState.trim(),
-        zipCode: businessAddressZipCode.trim(),
-      },
+      businessAddress:
+        Object.keys(businessAddress).length > 0 ? businessAddress : undefined,
       businessPhone: businessPhone.trim(),
       website: website ? website.trim() : "",
-      // Store service names directly instead of ObjectIds
       servicesProvided: servicesArray,
       description: description ? description.trim() : "",
       experience: experience ? parseInt(experience) : 0,

@@ -56,6 +56,8 @@ app.use("/api/auth", require("./routes/auth"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/users", require("./routes/users"));
 
+app.use("/api/zip", require("./routes/zip"));
+
 // Add these routes if you have them
 app.use("/api/service-requests", require("./routes/serviceRequests"));
 app.use("/api/auth/password-reset", require("./routes/passwordReset"));

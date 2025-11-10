@@ -1,57 +1,65 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 
-const verificationSchema = new mongoose.Schema({
+const verificationSchema = new mongoose.Schema(
+  {
     provider: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'ServiceProvider',
-        required: true
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ServiceProvider",
+      required: true,
     },
     einNumber: {
-        type: String,
-        required: [true, 'EIN Number is required'],
-        trim: true
+      type: String,
+      required: [true, "EIN Number is required"],
+      trim: true,
+    },
+    businessRegisteredCountry: {
+      type: String,
+      required: [true, "Business registered country is required"],
+      trim: true,
     },
     insuranceDocument: {
-        url: {
-            type: String,
-            required: [true, 'Insurance document is required']
-        },
-        publicId: {
-            type: String,
-            required: true
-        }
+      url: {
+        type: String,
+        required: [true, "Insurance document is required"],
+      },
+      publicId: {
+        type: String,
+        required: true,
+      },
     },
     firstName: {
-        type: String,
-        required: [true, 'First name is required'],
-        trim: true
+      type: String,
+      required: [true, "First name is required"],
+      trim: true,
     },
     lastName: {
-        type: String,
-        required: [true, 'Last name is required'],
-        trim: true
+      type: String,
+      required: [true, "Last name is required"],
+      trim: true,
     },
     status: {
-        type: String,
-        enum: ['pending', 'approved', 'rejected'],
-        default: 'pending'
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
     },
     reviewedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Admin'
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
     },
     reviewedAt: {
-        type: Date
+      type: Date,
     },
     rejectionReason: {
-        type: String
+      type: String,
     },
     submittedAt: {
-        type: Date,
-        default: Date.now
-    }
-}, {
-    timestamps: true
-});
+      type: Date,
+      default: Date.now,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
 
-module.exports = mongoose.model('Verification', verificationSchema);
+module.exports = mongoose.model("Verification", verificationSchema);

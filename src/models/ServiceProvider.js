@@ -66,19 +66,19 @@ const serviceProviderSchema = new mongoose.Schema(
     businessAddress: {
       street: {
         type: String,
-        required: [true, "Business street address is required"],
+        default: "",
       },
       city: {
         type: String,
-        required: [true, "Business city is required"],
+        default: "",
       },
       state: {
         type: String,
-        required: [true, "Business state is required"],
+        default: "",
       },
       zipCode: {
         type: String,
-        required: [true, "Business ZIP code is required"],
+        default: "",
       },
     },
     businessPhone: {
