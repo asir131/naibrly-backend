@@ -58,6 +58,32 @@ app.use("/api/users", require("./routes/users"));
 
 app.use("/api/zip", require("./routes/zip"));
 
+// API listing route at root
+app.get("/", (req, res) => {
+  const port = process.env.PORT || 5000;
+  res.json({
+    success: true,
+    message: `Naibrly API is running on port ${port}`,
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      auth: "/api/auth",
+      admin: "/api/admin",
+      users: "/api/users",
+      zip: "/api/zip",
+      serviceRequests: "/api/service-requests",
+      passwordReset: "/api/auth/password-reset",
+      verification: "/api/verify-information",
+      upload: "/api/upload",
+      categories: "/api/categories",
+      bundles: "/api/bundles",
+      bundleSettings: "/api/bundle-settings",
+      providers: "/api/providers",
+    },
+    health: "/health",
+    test: "/api/test",
+  });
+});
+
 // Add these routes if you have them
 app.use("/api/service-requests", require("./routes/serviceRequests"));
 app.use("/api/auth/password-reset", require("./routes/passwordReset"));
