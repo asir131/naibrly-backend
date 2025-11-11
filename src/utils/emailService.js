@@ -1,42 +1,42 @@
-const nodemailer = require('nodemailer');
+const nodemailer = require("nodemailer");
 
 // Create transporter - FIXED: Consistent function naming
 const createTransporter = () => {
-    return nodemailer.createTransport({
-        service: process.env.EMAIL_SERVICE || 'gmail',
-        host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-        port: process.env.EMAIL_PORT || 587,
-        secure: false,
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS
-        }
-    });
+  return nodemailer.createTransport({
+    service: process.env.EMAIL_SERVICE || "gmail",
+    host: process.env.EMAIL_HOST || "smtp.gmail.com",
+    port: process.env.EMAIL_PORT || 587,
+    secure: false,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
 };
 
 // Verify transporter connection
 const verifyTransporter = async () => {
-    try {
-        const transporter = createTransporter(); // FIXED: Now matches function name
-        await transporter.verify();
-        console.log('✅ Email server is ready to send messages');
-        return true;
-    } catch (error) {
-        console.error('❌ Email transporter error:', error.message);
-        return false;
-    }
+  try {
+    const transporter = createTransporter(); // FIXED: Now matches function name
+    await transporter.verify();
+    console.log("✅ Email server is ready to send messages");
+    return true;
+  } catch (error) {
+    console.error("❌ Email transporter error:", error.message);
+    return false;
+  }
 };
 
 // Send OTP email
 const sendOTPEmail = async (email, otp, userName) => {
-    try {
-        const transporter = createTransporter(); // FIXED: Now matches function name
-        
-        const mailOptions = {
-            from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-            to: email,
-            subject: 'Password Reset OTP - Naibrly',
-            html: `
+  try {
+    const transporter = createTransporter(); // FIXED: Now matches function name
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: email,
+      subject: "Password Reset OTP - Naibrly",
+      html: `
                 <!DOCTYPE html>
                 <html>
                 <head>
@@ -57,7 +57,9 @@ const sendOTPEmail = async (email, otp, userName) => {
                         <p class="info">Hello ${userName},</p>
                         <p class="info">You requested to reset your password. Use the following OTP code to proceed:</p>
                         <div class="otp-code">${otp}</div>
-                        <p class="info">This OTP is valid for ${process.env.OTP_EXPIRY_MINUTES || 10} minutes.</p>
+                        <p class="info">This OTP is valid for ${
+                          process.env.OTP_EXPIRY_MINUTES || 10
+                        } minutes.</p>
                         <p class="info">If you didn't request this, please ignore this email.</p>
                         <div class="footer">
                             <p>Naibrly Team</p>
@@ -66,28 +68,28 @@ const sendOTPEmail = async (email, otp, userName) => {
                     </div>
                 </body>
                 </html>
-            `
-        };
+            `,
+    };
 
-        const result = await transporter.sendMail(mailOptions);
-        console.log('✅ OTP email sent to:', email);
-        return { success: true, messageId: result.messageId };
-    } catch (error) {
-        console.error('❌ Error sending OTP email:', error.message);
-        return { success: false, error: error.message };
-    }
+    const result = await transporter.sendMail(mailOptions);
+    console.log("✅ OTP email sent to:", email);
+    return { success: true, messageId: result.messageId };
+  } catch (error) {
+    console.error("❌ Error sending OTP email:", error.message);
+    return { success: false, error: error.message };
+  }
 };
 
 // Send password reset success email
 const sendPasswordResetSuccessEmail = async (email, userName) => {
-    try {
-        const transporter = createTransporter(); // FIXED: Now matches function name
-        
-        const mailOptions = {
-            from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-            to: email,
-            subject: 'Password Reset Successful - Naibrly',
-            html: `
+  try {
+    const transporter = createTransporter(); // FIXED: Now matches function name
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: email,
+      subject: "Password Reset Successful - Naibrly",
+      html: `
                 <!DOCTYPE html>
                 <html>
                 <head>
@@ -116,31 +118,31 @@ const sendPasswordResetSuccessEmail = async (email, userName) => {
                     </div>
                 </body>
                 </html>
-            `
-        };
+            `,
+    };
 
-        await transporter.sendMail(mailOptions);
-        console.log('✅ Password reset success email sent to:', email);
-        return { success: true };
-    } catch (error) {
-        console.error('❌ Error sending success email:', error.message);
-        return { success: false, error: error.message };
-    }
+    await transporter.sendMail(mailOptions);
+    console.log("✅ Password reset success email sent to:", email);
+    return { success: true };
+  } catch (error) {
+    console.error("❌ Error sending success email:", error.message);
+    return { success: false, error: error.message };
+  }
 };
 
 // Test email configuration on server start
 const testEmailConfig = async () => {
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        console.warn('⚠️  Email credentials not found. OTP emails will not work.');
-        console.warn('   Please set EMAIL_USER and EMAIL_PASS in your .env file');
-        return false;
-    }
-    
-    return await verifyTransporter();
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.warn("⚠️  Email credentials not found. OTP emails will not work.");
+    console.warn("   Please set EMAIL_USER and EMAIL_PASS in your .env file");
+    return false;
+  }
+
+  return await verifyTransporter();
 };
 
-module.exports = { 
-    sendOTPEmail, 
-    sendPasswordResetSuccessEmail, 
-    testEmailConfig 
+module.exports = {
+  sendOTPEmail,
+  sendPasswordResetSuccessEmail,
+  testEmailConfig,
 };
