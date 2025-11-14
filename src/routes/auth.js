@@ -72,8 +72,7 @@ router.post(
 router.post(
   "/register/provider",
   providerUpload.fields([
-    { name: "profileImage", maxCount: 1 },
-    { name: "businessLogo", maxCount: 1 },
+    { name: "businessLogo", maxCount: 1 }, // Removed profileImage
   ]),
   registerProvider
 );
@@ -83,7 +82,7 @@ router.post("/login", login);
 // Protected routes
 router.get("/me", auth, getMe);
 router.get("/provider/status", auth, checkProviderStatus);
-router.get("/providers", auth, getAllProviders);
+router.get("/providers", getAllProviders);
 router.patch("/provider/approve/:providerId", auth, approveProvider);
 
 module.exports = router;

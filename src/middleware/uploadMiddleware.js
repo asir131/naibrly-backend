@@ -47,15 +47,25 @@ const uploadProviderRegistration = multer({
     fileSize: 5 * 1024 * 1024, // 5MB per file
   },
   fileFilter: (req, file, cb) => {
-    // Only allow image files
-    if (file.mimetype.startsWith("image/")) {
+    // Only allow businessLogo field now
+    const allowedFields = ["businessLogo"]; // Removed "profileImage"
+    if (
+      allowedFields.includes(file.fieldname) &&
+      file.mimetype.startsWith("image/")
+    ) {
       cb(null, true);
     } else {
-      cb(new Error("Only image files are allowed!"), false);
+      cb(
+        new Error(
+          `Provider: Only ${allowedFields.join(
+            ", "
+          )} fields with image files are allowed!`
+        ),
+        false
+      );
     }
   },
 });
-
 // For customer registration (single file)
 const uploadCustomerRegistration = multer({
   storage: createFlexibleStorage(),

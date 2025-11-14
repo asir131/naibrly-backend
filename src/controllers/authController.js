@@ -203,6 +203,7 @@ const registerCustomer = async (req, res) => {
 };
 
 // Enhanced provider registration with proper image handling
+
 const registerProvider = async (req, res) => {
   try {
     const {
@@ -214,24 +215,20 @@ const registerProvider = async (req, res) => {
       businessNameRegistered,
       businessNameDBA,
       providerRole,
-      // Individual address fields - now optional
       businessAddressStreet,
       businessAddressCity,
       businessAddressState,
       businessAddressZipCode,
-      businessPhone,
       website,
-      servicesProvided,
       description,
       experience,
-      hourlyRate,
       businessServiceStart,
       businessServiceEnd,
       businessHoursStart,
       businessHoursEnd,
     } = req.body;
 
-    // Validation - removed address fields from required
+    // Validation
     if (
       !firstName ||
       !lastName ||
@@ -239,8 +236,7 @@ const registerProvider = async (req, res) => {
       !password ||
       !phone ||
       !businessNameRegistered ||
-      !providerRole ||
-      !businessPhone
+      !providerRole
     ) {
       return res.status(400).json({
         success: false,
@@ -253,7 +249,6 @@ const registerProvider = async (req, res) => {
           phone: !phone,
           businessNameRegistered: !businessNameRegistered,
           providerRole: !providerRole,
-          businessPhone: !businessPhone,
         },
       });
     }
@@ -273,42 +268,82 @@ const registerProvider = async (req, res) => {
       });
     }
 
+    // FIXED: Parse services from multiple form fields
     let servicesArray = [];
-    if (servicesProvided) {
-      let serviceNames = [];
 
-      if (typeof servicesProvided === "string") {
-        serviceNames = servicesProvided.split(",").map((s) => s.trim());
-      } else if (Array.isArray(servicesProvided)) {
-        serviceNames = servicesProvided;
+    console.log("All request body fields:", req.body);
+
+    // Handle services parsing - fix for Postman array issue
+    if (req.body.servicesProvidedName) {
+      let serviceNames = [];
+      let serviceRates = [];
+
+      // If servicesProvidedName is an array (multiple values with same key)
+      if (Array.isArray(req.body.servicesProvidedName)) {
+        serviceNames = req.body.servicesProvidedName;
+      } else {
+        // If it's a single value
+        serviceNames = [req.body.servicesProvidedName];
       }
 
-      serviceNames = [...new Set(serviceNames)].filter(
-        (name) => name.length > 0
-      );
+      // If servicesProvidedHourlyRate is an array
+      if (req.body.servicesProvidedHourlyRate) {
+        if (Array.isArray(req.body.servicesProvidedHourlyRate)) {
+          serviceRates = req.body.servicesProvidedHourlyRate;
+        } else {
+          serviceRates = [req.body.servicesProvidedHourlyRate];
+        }
+      }
 
-      if (serviceNames.length > 0) {
-        const services = await Service.find({
-          name: { $in: serviceNames },
-          isActive: true,
-        });
+      console.log("Service names found:", serviceNames);
+      console.log("Service rates found:", serviceRates);
 
-        if (services.length !== serviceNames.length) {
-          const foundServiceNames = services.map((s) => s.name);
-          const missingServices = serviceNames.filter(
-            (name) => !foundServiceNames.includes(name)
-          );
+      // Create services array by pairing names with rates
+      for (let i = 0; i < serviceNames.length; i++) {
+        let serviceName = serviceNames[i];
+        let hourlyRate = serviceRates[i] ? parseFloat(serviceRates[i]) : 0;
 
-          return res.status(400).json({
-            success: false,
-            message: `Invalid services: ${missingServices.join(
-              ", "
-            )}. Please provide valid service names.`,
-          });
+        // FIX: Handle case where serviceName might be an array
+        if (Array.isArray(serviceName)) {
+          serviceName = serviceName[0]; // Take the first element
         }
 
-        // Save service names instead of IDs
-        servicesArray = serviceNames;
+        // FIX: Ensure serviceName is a string before calling trim
+        if (
+          serviceName &&
+          typeof serviceName === "string" &&
+          serviceName.trim().length > 0
+        ) {
+          servicesArray.push({
+            name: serviceName.trim(),
+            hourlyRate: hourlyRate,
+          });
+        }
+      }
+    }
+
+    console.log("Final services array:", servicesArray);
+
+    // Validate services exist in the system
+    if (servicesArray.length > 0) {
+      const serviceNames = servicesArray.map((s) => s.name);
+      const validServices = await Service.find({
+        name: { $in: serviceNames },
+        isActive: true,
+      });
+
+      if (validServices.length !== serviceNames.length) {
+        const validServiceNames = validServices.map((s) => s.name);
+        const missingServices = serviceNames.filter(
+          (name) => !validServiceNames.includes(name)
+        );
+
+        return res.status(400).json({
+          success: false,
+          message: `Invalid services: ${missingServices.join(
+            ", "
+          )}. Please provide valid service names.`,
+        });
       }
     }
 
@@ -336,37 +371,7 @@ const registerProvider = async (req, res) => {
       });
     }
 
-    // Handle profile image upload from memory buffer
-    let profileImageData = { url: "", publicId: "" };
-    if (req.files && req.files["profileImage"]) {
-      const profileImage = req.files["profileImage"][0];
-      console.log("Processing profile image from memory buffer");
-
-      try {
-        const timestamp = Date.now();
-        const randomString = Math.random().toString(36).substring(2, 15);
-        const publicId = `provider_profile_${timestamp}_${randomString}`;
-
-        const result = await uploadToCloudinary(
-          profileImage.buffer,
-          "naibrly/profiles",
-          publicId
-        );
-
-        profileImageData = {
-          url: result.secure_url,
-          publicId: result.public_id,
-        };
-        console.log("Profile image uploaded to Cloudinary:", profileImageData);
-      } catch (uploadError) {
-        console.error(
-          "Cloudinary upload error for profile image:",
-          uploadError
-        );
-      }
-    }
-
-    // Handle business logo upload from memory buffer
+    // Handle business logo upload only (profile image removed)
     let businessLogoData = { url: "", publicId: "" };
     if (req.files && req.files["businessLogo"]) {
       const businessLogo = req.files["businessLogo"][0];
@@ -406,6 +411,13 @@ const registerProvider = async (req, res) => {
     if (businessAddressZipCode)
       businessAddress.zipCode = businessAddressZipCode.trim();
 
+    // Calculate average hourly rate for legacy compatibility
+    const averageHourlyRate =
+      servicesArray.length > 0
+        ? servicesArray.reduce((sum, service) => sum + service.hourlyRate, 0) /
+          servicesArray.length
+        : 0;
+
     // Create the service provider
     const serviceProvider = new ServiceProvider({
       firstName: firstName.trim(),
@@ -413,19 +425,18 @@ const registerProvider = async (req, res) => {
       email: email.toLowerCase().trim(),
       password,
       phone: phone.trim(),
-      profileImage: profileImageData,
+      profileImage: { url: "", publicId: "" }, // Empty profile image
       businessLogo: businessLogoData,
       businessNameRegistered: businessNameRegistered.trim(),
       businessNameDBA: businessNameDBA ? businessNameDBA.trim() : "",
       providerRole,
       businessAddress:
         Object.keys(businessAddress).length > 0 ? businessAddress : undefined,
-      businessPhone: businessPhone.trim(),
       website: website ? website.trim() : "",
       servicesProvided: servicesArray,
       description: description ? description.trim() : "",
       experience: experience ? parseInt(experience) : 0,
-      hourlyRate: hourlyRate ? parseFloat(hourlyRate) : 0,
+      hourlyRate: averageHourlyRate,
       businessServiceDays,
       businessHours,
       isApproved: process.env.AUTO_APPROVE_PROVIDERS === "true" || false,
@@ -439,20 +450,8 @@ const registerProvider = async (req, res) => {
     // Verify what was actually saved
     const savedProvider = await ServiceProvider.findById(serviceProvider._id);
     console.log(
-      "Provider after save - profileImage:",
-      savedProvider.profileImage
-    );
-    console.log(
-      "Provider after save - businessLogo:",
-      savedProvider.businessLogo
-    );
-    console.log(
       "Provider after save - servicesProvided:",
       savedProvider.servicesProvided
-    );
-    console.log(
-      "Provider after save - businessAddress:",
-      savedProvider.businessAddress
     );
 
     const token = generateToken(serviceProvider._id);

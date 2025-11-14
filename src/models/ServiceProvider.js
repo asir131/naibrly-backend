@@ -1,3 +1,4 @@
+// models/ServiceProvider.js
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
@@ -29,16 +30,7 @@ const serviceProviderSchema = new mongoose.Schema(
       type: String,
       required: [true, "Phone number is required"],
     },
-    profileImage: {
-      url: {
-        type: String,
-        default: "",
-      },
-      publicId: {
-        type: String,
-        default: "",
-      },
-    },
+
     businessLogo: {
       url: {
         type: String,
@@ -81,18 +73,22 @@ const serviceProviderSchema = new mongoose.Schema(
         default: "",
       },
     },
-    businessPhone: {
-      type: String,
-      required: [true, "Business phone is required"],
-    },
     website: {
       type: String,
       default: "",
     },
     servicesProvided: [
       {
-        type: String,
-        trim: true,
+        name: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        hourlyRate: {
+          type: Number,
+          default: 0,
+          min: 0,
+        },
       },
     ],
     description: {
@@ -103,7 +99,6 @@ const serviceProviderSchema = new mongoose.Schema(
       type: Number,
       min: 0,
     },
-    // Bundle capacity set by provider
     maxBundleCapacity: {
       type: Number,
       default: 5,
@@ -136,6 +131,7 @@ const serviceProviderSchema = new mongoose.Schema(
     hourlyRate: {
       type: Number,
       min: 0,
+      default: 0,
     },
     servicePricing: {
       type: Map,
@@ -202,6 +198,7 @@ const serviceProviderSchema = new mongoose.Schema(
   }
 );
 
+// Hash password before saving
 serviceProviderSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next();
 
@@ -214,6 +211,7 @@ serviceProviderSchema.pre("save", async function (next) {
   }
 });
 
+// Compare password method
 serviceProviderSchema.methods.comparePassword = async function (
   candidatePassword
 ) {
