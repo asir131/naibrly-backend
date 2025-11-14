@@ -1,3 +1,4 @@
+// controllers/bundleController.js
 const Bundle = require("../models/Bundle");
 const BundleSettings = require("../models/BundleSettings");
 const Customer = require("../models/Customer");
@@ -24,13 +25,24 @@ exports.createBundle = async (req, res) => {
     const {
       category,
       categoryTypeName,
-      services,
+      services, // Array of service names only
       serviceDate,
       serviceTimeStart,
       serviceTimeEnd,
       title,
       description,
     } = req.body;
+
+    console.log("🔍 Debug - Bundle creation request:", {
+      category,
+      categoryTypeName,
+      services,
+      serviceDate,
+      serviceTimeStart,
+      serviceTimeEnd,
+      title,
+      description,
+    });
 
     // Validation
     if (
@@ -56,21 +68,55 @@ exports.createBundle = async (req, res) => {
       });
     }
 
+    // Parse services array - only service names
+    let servicesArray = [];
+
+    if (typeof services === "string") {
+      try {
+        // Try to parse as JSON array
+        servicesArray = JSON.parse(services);
+      } catch (error) {
+        // If JSON parsing fails, try comma-separated string
+        servicesArray = services.split(",").map((s) => s.trim());
+      }
+    } else if (Array.isArray(services)) {
+      servicesArray = services;
+    }
+
+    // Ensure all services are strings
+    servicesArray = servicesArray
+      .map((service) => {
+        if (typeof service === "string") {
+          return service.trim();
+        } else if (service && typeof service === "object" && service.name) {
+          return service.name.trim(); // Extract name if object is passed
+        }
+        return String(service).trim(); // Fallback
+      })
+      .filter((service) => service && service.length > 0);
+
+    console.log("🔍 Debug - Final services array:", servicesArray);
+
     // Validate services exist in the system
     const validServices = await Service.find({
-      name: { $in: services },
+      name: { $in: servicesArray },
       isActive: true,
     });
 
-    if (validServices.length !== services.length) {
+    if (validServices.length !== servicesArray.length) {
       const validServiceNames = validServices.map((s) => s.name);
-      const invalidServices = services.filter(
+      const invalidServices = servicesArray.filter(
         (service) => !validServiceNames.includes(service)
       );
 
       return res.status(400).json({
         success: false,
         message: `Invalid services: ${invalidServices.join(", ")}`,
+        debug: {
+          requested: servicesArray,
+          valid: validServiceNames,
+          invalid: invalidServices,
+        },
       });
     }
 
@@ -80,14 +126,14 @@ exports.createBundle = async (req, res) => {
     const bundleDiscount = bundleSettings?.bundleDiscount || 5;
     const expiryHours = bundleSettings?.bundleExpiryHours || 24;
 
-    // Calculate pricing using average service prices
+    // Calculate pricing using average service prices from providers
     let totalPrice = 0;
     const servicesWithPricing = [];
 
-    for (const serviceName of services) {
-      // Get average price for this service from providers
+    for (const serviceName of servicesArray) {
+      // Get providers who offer this service
       const providersWithService = await ServiceProvider.find({
-        servicesProvided: serviceName,
+        "servicesProvided.name": serviceName,
         isApproved: true,
         isActive: true,
       });
@@ -95,12 +141,15 @@ exports.createBundle = async (req, res) => {
       let servicePrice = 50; // Default price if no providers found
 
       if (providersWithService.length > 0) {
+        // Calculate average price from providers who offer this service
         const totalServicePrice = providersWithService.reduce(
           (sum, provider) => {
+            const providerService = provider.servicesProvided.find(
+              (s) => s.name === serviceName
+            );
+            // Use provider's hourly rate for this service, or fallback to general hourly rate
             return (
-              sum +
-              (provider.servicePricing?.get(serviceName) ||
-                provider.hourlyRate * 2)
+              sum + (providerService?.hourlyRate || provider.hourlyRate || 50)
             );
           },
           0
@@ -110,6 +159,7 @@ exports.createBundle = async (req, res) => {
         );
       }
 
+      // Create service object with name and calculated price
       servicesWithPricing.push({
         name: serviceName,
         price: servicePrice,
@@ -125,11 +175,12 @@ exports.createBundle = async (req, res) => {
     // Create bundle
     const bundle = new Bundle({
       creator: customer._id,
-      title: title || `${services.join(", ")} Bundle`,
-      description: description || `Bundle of ${services.join(", ")} services`,
+      title: title || `${servicesArray.join(", ")} Bundle`,
+      description:
+        description || `Bundle of ${servicesArray.join(", ")} services`,
       category,
       categoryTypeName,
-      services: servicesWithPricing,
+      services: servicesWithPricing, // Array of objects with name and calculated price
       serviceDate: new Date(serviceDate),
       serviceTimeStart,
       serviceTimeEnd,
@@ -154,11 +205,13 @@ exports.createBundle = async (req, res) => {
       expiresAt: new Date(Date.now() + expiryHours * 60 * 60 * 1000),
     });
 
+    console.log("🔍 Debug - Bundle object before save:", bundle.services);
+
     await bundle.save();
 
     // Find matching providers and notify them
     const matchingProviders = await ServiceProvider.find({
-      servicesProvided: { $in: services },
+      "servicesProvided.name": { $in: servicesArray },
       "businessAddress.zipCode": customer.address.zipCode,
       isApproved: true,
       isActive: true,
@@ -185,6 +238,7 @@ exports.createBundle = async (req, res) => {
           finalPrice,
           pricePerPerson,
         },
+        services: servicesArray, // Return the service names used
       },
     });
   } catch (error) {
@@ -199,6 +253,14 @@ exports.createBundle = async (req, res) => {
       });
     }
 
+    if (error.name === "ObjectParameterError") {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid data format for services",
+        error: "Services must be provided as an array of service names",
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: "Failed to create bundle",
@@ -207,7 +269,6 @@ exports.createBundle = async (req, res) => {
   }
 };
 
-// Provider accepts a bundle directly
 // Provider accepts a bundle directly
 exports.providerAcceptBundle = async (req, res) => {
   try {
@@ -249,7 +310,7 @@ exports.providerAcceptBundle = async (req, res) => {
 
     const bundleServiceNames = bundle.services.map((s) => s.name);
     const providerCanService = bundleServiceNames.every((service) =>
-      provider.servicesProvided.includes(service)
+      provider.servicesProvided.some((sp) => sp.name === service)
     );
 
     if (!providerCanService) {
@@ -271,7 +332,7 @@ exports.providerAcceptBundle = async (req, res) => {
       });
     }
 
-    // ✅ Use provider's maxBundleCapacity instead of global setting
+    // Use provider's maxBundleCapacity instead of global setting
     const providerMaxCapacity = provider.maxBundleCapacity || 5;
 
     // Update bundle with provider's capacity
@@ -448,7 +509,7 @@ exports.joinBundle = async (req, res) => {
       });
     }
 
-    // ✅ ZIP CODE VALIDATION: Check if customer is in same zip code as bundle creator
+    // ZIP CODE VALIDATION: Check if customer is in same zip code as bundle creator
     if (customer.address.zipCode !== bundle.zipCode) {
       return res.status(400).json({
         success: false,
@@ -527,7 +588,11 @@ exports.getProviderAvailableBundles = async (req, res) => {
       status: status,
       expiresAt: { $gt: new Date() },
       $or: [
-        { "services.name": { $in: provider.servicesProvided } },
+        {
+          "services.name": {
+            $in: provider.servicesProvided.map((s) => s.name),
+          },
+        },
         { "providerOffers.provider": { $ne: req.user._id } },
       ],
     };
@@ -547,7 +612,7 @@ exports.getProviderAvailableBundles = async (req, res) => {
     // Enhance bundles with match score
     const enhancedBundles = bundles.map((bundle) => {
       const matchingServices = bundle.services.filter((service) =>
-        provider.servicesProvided.includes(service.name)
+        provider.servicesProvided.some((sp) => sp.name === service.name)
       );
       const matchScore =
         (matchingServices.length / bundle.services.length) * 100;
@@ -567,7 +632,7 @@ exports.getProviderAvailableBundles = async (req, res) => {
       data: {
         bundles: enhancedBundles,
         providerZipCode: provider.businessAddress.zipCode,
-        providerServices: provider.servicesProvided,
+        providerServices: provider.servicesProvided.map((s) => s.name),
         pagination: {
           current: parseInt(page),
           total,
@@ -655,7 +720,7 @@ exports.getCustomerBundles = async (req, res) => {
     const total = await Bundle.countDocuments(filter);
 
     res.json({
-      success: true,
+      success: false,
       data: {
         bundles,
         pagination: {
