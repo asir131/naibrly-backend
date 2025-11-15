@@ -6,13 +6,13 @@ const serviceProviderSchema = new mongoose.Schema(
   {
     firstName: {
       type: String,
-      required: [true, "First name is required"],
       trim: true,
+      default: "",
     },
     lastName: {
       type: String,
-      required: [true, "Last name is required"],
       trim: true,
+      default: "",
     },
     email: {
       type: String,

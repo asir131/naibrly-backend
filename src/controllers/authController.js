@@ -207,8 +207,6 @@ const registerCustomer = async (req, res) => {
 const registerProvider = async (req, res) => {
   try {
     const {
-      firstName,
-      lastName,
       email,
       password,
       phone,
@@ -228,10 +226,8 @@ const registerProvider = async (req, res) => {
       businessHoursEnd,
     } = req.body;
 
-    // Validation
+    // Validation (firstName/lastName removed)
     if (
-      !firstName ||
-      !lastName ||
       !email ||
       !password ||
       !phone ||
@@ -242,8 +238,6 @@ const registerProvider = async (req, res) => {
         success: false,
         message: "Please fill in all required fields",
         missingFields: {
-          firstName: !firstName,
-          lastName: !lastName,
           email: !email,
           password: !password,
           phone: !phone,
@@ -420,8 +414,6 @@ const registerProvider = async (req, res) => {
 
     // Create the service provider
     const serviceProvider = new ServiceProvider({
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
       email: email.toLowerCase().trim(),
       password,
       phone: phone.trim(),
@@ -465,8 +457,6 @@ const registerProvider = async (req, res) => {
         token,
         user: {
           id: serviceProvider._id,
-          firstName: serviceProvider.firstName,
-          lastName: serviceProvider.lastName,
           email: serviceProvider.email,
           phone: serviceProvider.phone,
           profileImage: serviceProvider.profileImage,

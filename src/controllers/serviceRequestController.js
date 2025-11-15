@@ -828,6 +828,85 @@ exports.getProvidersByService = async (req, res) => {
   }
 };
 
+// Nearby services by customer's ZIP code
+exports.getNearbyServicesByZip = async (req, res) => {
+  try {
+    const { page = 1, limit = 20, q } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Load the customer to get zip code
+    const customer = await Customer.findById(req.user._id).select("address.zipCode");
+    if (!customer) {
+      return res.status(404).json({ success: false, message: "Customer not found" });
+    }
+    const zipCode = customer.address.zipCode;
+
+    // Find providers in same ZIP who are active and approved
+    const providerFilter = {
+      isApproved: true,
+      isActive: true,
+      "businessAddress.zipCode": zipCode,
+    };
+
+    // Optional search on service name
+    const nameMatch = q ? { name: { $regex: q, $options: "i" } } : {};
+
+    // Project each provider's servicesProvided array into separate rows
+    const pipeline = [
+      { $match: providerFilter },
+      { $unwind: "$servicesProvided" },
+      { $replaceRoot: { newRoot: { $mergeObjects: ["$ROOT", { service: "$servicesProvided" }] } } },
+      { $project: { servicesProvided: 0, password: 0 } },
+      { $match: { "service.name": nameMatch.name || { $exists: true } } },
+      { $sort: { rating: -1, totalJobsCompleted: -1 } },
+      { $skip: skip },
+      { $limit: parseInt(limit) },
+    ];
+
+    const [items, totalAgg] = await Promise.all([
+      ServiceProvider.aggregate(pipeline),
+      ServiceProvider.aggregate([
+        { $match: providerFilter },
+        { $unwind: "$servicesProvided" },
+        { $match: { "service.name": nameMatch.name || { $exists: true } } },
+        { $count: "count" },
+      ]),
+    ]);
+
+    const total = totalAgg.length ? totalAgg[0].count : 0;
+
+    // Map to required shape: each row is a service + provider id
+    const services = items.map((doc) => ({
+      serviceName: doc.service.name,
+      hourlyRate: doc.service.hourlyRate || doc.hourlyRate || null,
+      providerId: doc._id,
+      provider: {
+        id: doc._id,
+        businessName: doc.businessNameRegistered,
+        rating: doc.rating,
+        totalReviews: doc.totalReviews,
+        businessAddress: doc.businessAddress,
+      },
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        zipCode,
+        services,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get nearby services by zip error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch nearby services", error: error.message });
+  }
+};
+
 // Get provider's requests with status filter
 exports.getProviderRequestsByStatus = async (req, res) => {
   try {

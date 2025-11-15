@@ -35,4 +35,7 @@ router.patch("/:requestId/status", auth, updateRequestStatus);
 // Public routes (for browsing providers)
 router.get("/providers", getProvidersByService);
 
+// Customer: Nearby services by ZIP
+router.get("/customer/nearby-services", auth, require("../controllers/serviceRequestController").getNearbyServicesByZip);
+
 module.exports = router;
