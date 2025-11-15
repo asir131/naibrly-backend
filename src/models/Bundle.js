@@ -136,6 +136,11 @@ const bundleSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    shareToken: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
   },
   {
     timestamps: true,

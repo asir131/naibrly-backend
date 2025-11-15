@@ -9,6 +9,7 @@ const {
   providerDeclineBundle,
   getProviderAcceptedBundles,
   getBundlesInCustomerArea,
+  joinBundleViaShareToken,
 } = require("../controllers/bundleController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -17,6 +18,7 @@ const router = express.Router();
 // Customer routes
 router.post("/create", auth, createBundle);
 router.post("/:bundleId/join", auth, joinBundle);
+router.post("/share/:shareToken/join", auth, joinBundleViaShareToken);
 router.get("/customer/my-bundles", auth, getCustomerBundles);
 router.get("/customer/nearby", auth, getBundlesInCustomerArea);
 router.get("/:bundleId", auth, getBundleDetails);

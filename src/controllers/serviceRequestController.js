@@ -155,21 +155,30 @@ exports.createServiceRequest = async (req, res) => {
 
     // Now check if provider offers these services
     const providerServices = provider.servicesProvided || [];
-    const normalizedProviderServices = providerServices.map((service) =>
-      service.toString().toLowerCase().trim()
-    );
+    
+    // Extract service names from provider's servicesProvided array
+    const providerServiceNames = providerServices.map((service) => {
+      // Handle both string and object formats
+      if (typeof service === 'string') {
+        return service.toLowerCase().trim();
+      } else if (service && typeof service === 'object' && service.name) {
+        return service.name.toLowerCase().trim();
+      }
+      return '';
+    }).filter(name => name);
 
     const providerValidServices = [];
     const providerInvalidServices = [];
 
     validServiceNames.forEach((serviceName) => {
       const normalizedService = serviceName.toLowerCase().trim();
-      const serviceIndex = normalizedProviderServices.findIndex(
+      const serviceIndex = providerServiceNames.findIndex(
         (service) => service === normalizedService
       );
 
       if (serviceIndex !== -1) {
-        providerValidServices.push(providerServices[serviceIndex]);
+        // Get the original service object from provider
+        providerValidServices.push(validServiceNames[validServiceNames.indexOf(serviceName)]);
       } else {
         providerInvalidServices.push(serviceName);
       }
@@ -178,20 +187,29 @@ exports.createServiceRequest = async (req, res) => {
     console.log("🔍 Debug - Provider service validation:", {
       providerValidServices,
       providerInvalidServices,
+      providerServiceNames,
     });
 
     // If provider doesn't offer the service, return error
     if (providerInvalidServices.length > 0) {
-      const availableServices = providerServices.join(", ");
+      const availableServiceNames = providerServices.map((service) => {
+        if (typeof service === 'string') {
+          return service;
+        } else if (service && typeof service === 'object' && service.name) {
+          return service.name;
+        }
+        return '';
+      }).filter(name => name);
+
       return res.status(400).json({
         success: false,
         message: `This provider does not offer: ${providerInvalidServices.join(
           ", "
-        )}. Available services: ${availableServices}`,
+        )}. Available services: ${availableServiceNames.join(", ")}`,
         debug: {
           requested: requestedServices,
           notOffered: providerInvalidServices,
-          available: providerServices,
+          available: availableServiceNames,
         },
       });
     }

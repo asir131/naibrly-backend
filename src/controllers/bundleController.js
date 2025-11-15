@@ -4,6 +4,8 @@ const BundleSettings = require("../models/BundleSettings");
 const Customer = require("../models/Customer");
 const ServiceProvider = require("../models/ServiceProvider");
 const Service = require("../models/Service");
+const crypto = require("crypto");
+const QRCode = require("qrcode");
 
 // Initialize default bundle settings
 const initializeBundleSettings = async () => {
@@ -172,6 +174,9 @@ exports.createBundle = async (req, res) => {
     const finalPrice = totalPrice * (1 - bundleDiscount / 100);
     const pricePerPerson = finalPrice / maxParticipants;
 
+    // Generate unique share token
+    const shareToken = crypto.randomBytes(16).toString("hex");
+
     // Create bundle
     const bundle = new Bundle({
       creator: customer._id,
@@ -203,11 +208,24 @@ exports.createBundle = async (req, res) => {
       finalPrice,
       pricePerPerson,
       expiresAt: new Date(Date.now() + expiryHours * 60 * 60 * 1000),
+      shareToken,
     });
 
     console.log("🔍 Debug - Bundle object before save:", bundle.services);
 
     await bundle.save();
+
+    // Generate shareable link and QR code
+    const baseUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const shareLink = `${baseUrl}/bundle/join/${shareToken}`;
+    
+    let qrCodeDataUrl;
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(shareLink);
+    } catch (qrError) {
+      console.error("QR Code generation error:", qrError);
+      qrCodeDataUrl = null;
+    }
 
     // Find matching providers and notify them
     const matchingProviders = await ServiceProvider.find({
@@ -239,6 +257,11 @@ exports.createBundle = async (req, res) => {
           pricePerPerson,
         },
         services: servicesArray, // Return the service names used
+        sharing: {
+          shareLink,
+          qrCode: qrCodeDataUrl,
+          shareToken,
+        },
       },
     });
   } catch (error) {
@@ -820,6 +843,119 @@ exports.getBundlesInCustomerArea = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch bundles in your area",
+      error: error.message,
+    });
+  }
+};
+
+// Join bundle via share token (public endpoint for customers in same ZIP)
+exports.joinBundleViaShareToken = async (req, res) => {
+  try {
+    const { shareToken } = req.params;
+
+    // Find bundle by share token
+    const bundle = await Bundle.findOne({ shareToken });
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found or link has expired",
+      });
+    }
+
+    // Check if bundle is expired
+    if (new Date() > bundle.expiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Bundle has expired",
+      });
+    }
+
+    // Check if customer is already in the bundle
+    const isAlreadyParticipant = bundle.participants.some(
+      (participant) =>
+        participant.customer.toString() === req.user._id.toString()
+    );
+
+    if (isAlreadyParticipant) {
+      return res.status(400).json({
+        success: false,
+        message: "You are already part of this bundle",
+      });
+    }
+
+    // Check if bundle is full
+    if (bundle.currentParticipants >= bundle.maxParticipants) {
+      bundle.status = "full";
+      await bundle.save();
+
+      return res.status(400).json({
+        success: false,
+        message: "Bundle is already full",
+      });
+    }
+
+    // Get customer
+    const customer = await Customer.findById(req.user._id);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    // ZIP CODE VALIDATION: Check if customer is in same zip code as bundle creator
+    if (customer.address.zipCode !== bundle.zipCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "You must be in the same ZIP code area as the bundle creator to join this bundle",
+      });
+    }
+
+    // Add customer to bundle
+    bundle.participants.push({
+      customer: customer._id,
+    });
+    bundle.currentParticipants += 1;
+
+    // Check if bundle is now full
+    if (bundle.currentParticipants >= bundle.maxParticipants) {
+      bundle.status = "full";
+    }
+
+    await bundle.save();
+
+    // Populate for response
+    await bundle.populate(
+      "participants.customer",
+      "firstName lastName profileImage address"
+    );
+    await bundle.populate("creator", "firstName lastName profileImage address");
+    await bundle.populate(
+      "provider",
+      "businessNameRegistered businessLogo rating"
+    );
+
+    res.json({
+      success: true,
+      message: "Successfully joined the bundle via share link",
+      data: {
+        bundle,
+        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        yourShare: bundle.pricePerPerson,
+        pricing: {
+          totalPrice: bundle.totalPrice,
+          bundleDiscount: `${bundle.bundleDiscount}%`,
+          finalPrice: bundle.finalPrice,
+          pricePerPerson: bundle.pricePerPerson,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Join bundle via share token error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to join bundle",
       error: error.message,
     });
   }
