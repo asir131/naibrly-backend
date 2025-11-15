@@ -414,6 +414,67 @@ exports.getCustomerRequests = async (req, res) => {
   }
 };
 
+// Combined: My All Requests (service requests + bundles created by customer)
+exports.getCustomerAllRequests = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Fetch service requests
+    const [requests, requestsTotal] = await Promise.all([
+      ServiceRequest.find({ customer: req.user._id })
+        .populate(
+          "provider",
+          "firstName lastName businessNameRegistered profileImage businessLogo phone rating"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      ServiceRequest.countDocuments({ customer: req.user._id }),
+    ]);
+
+    // Fetch bundles created by the customer
+    const Bundle = require("../models/Bundle");
+    const [bundles, bundlesTotal] = await Promise.all([
+      Bundle.find({ creator: req.user._id })
+        .populate(
+          "participants.customer",
+          "firstName lastName profileImage address"
+        )
+        .populate("provider", "businessNameRegistered businessLogo rating")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Bundle.countDocuments({ creator: req.user._id }),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        serviceRequests: {
+          items: requests,
+          pagination: {
+            current: parseInt(page),
+            total: requestsTotal,
+            pages: Math.ceil(requestsTotal / parseInt(limit)),
+          },
+        },
+        bundles: {
+          items: bundles,
+          pagination: {
+            current: parseInt(page),
+            total: bundlesTotal,
+            pages: Math.ceil(bundlesTotal / parseInt(limit)),
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get customer all requests error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch data", error: error.message });
+  }
+};
+
 // Get service requests for provider
 exports.getProviderRequests = async (req, res) => {
   try {

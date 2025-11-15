@@ -2,6 +2,7 @@ const express = require("express");
 const {
   createServiceRequest,
   getCustomerRequests,
+  getCustomerAllRequests,
   getProviderRequests,
   updateRequestStatus,
   cancelRequest,
@@ -21,6 +22,7 @@ router.get("/test-provider/:providerId", testProviderServices);
 // Customer routes
 router.post("/", auth, createServiceRequest);
 router.get("/customer/my-requests", auth, getCustomerRequests);
+router.get("/customer/my-all-requests", auth, getCustomerAllRequests);
 router.patch("/:requestId/cancel", auth, cancelRequest);
 router.post("/:requestId/review", auth, addReview);
 
