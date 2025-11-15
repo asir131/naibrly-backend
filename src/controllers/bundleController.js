@@ -454,7 +454,7 @@ exports.providerDeclineBundle = async (req, res) => {
   }
 };
 
-// Join an existing bundle (with ZIP code validation)
+// Join an existing bundle (customers from same ZIP can join anytime regardless of provider acceptance)
 exports.joinBundle = async (req, res) => {
   try {
     const { bundleId } = req.params;
@@ -464,15 +464,6 @@ exports.joinBundle = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Bundle not found",
-      });
-    }
-
-    // Check if bundle is accepted and open for joining
-    if (bundle.status !== "accepted") {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Bundle is not available for joining. It must be accepted by a provider first.",
       });
     }
 
@@ -523,6 +514,9 @@ exports.joinBundle = async (req, res) => {
       customer: customer._id,
     });
     bundle.currentParticipants += 1;
+
+    // If provider already accepted and capacity is provider-specific, pricePerPerson already calculated.
+    // If provider has not accepted yet, keep existing maxParticipants and pricePerPerson (based on settings).
 
     // Check if bundle is now full
     if (bundle.currentParticipants >= bundle.maxParticipants) {
