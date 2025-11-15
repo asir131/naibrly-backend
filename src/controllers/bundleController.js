@@ -775,4 +775,54 @@ exports.getBundleDetails = async (req, res) => {
   }
 };
 
+// Get bundles available in the authenticated customer's ZIP code
+exports.getBundlesInCustomerArea = async (req, res) => {
+  try {
+    const { status, page = 1, limit = 10 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Fetch customer to get ZIP code
+    const customer = await Customer.findById(req.user._id);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: "Customer not found" });
+    }
+
+    const filter = {
+      zipCode: customer.address.zipCode,
+      expiresAt: { $gt: new Date() },
+    };
+    if (status) filter.status = status; // optional status filter
+
+    const bundles = await Bundle.find(filter)
+      .populate("creator", "firstName lastName profileImage address")
+      .populate("provider", "businessNameRegistered businessLogo rating")
+      .populate("participants.customer", "firstName lastName profileImage address")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Bundle.countDocuments(filter);
+
+    res.json({
+      success: true,
+      data: {
+        zipCode: customer.address.zipCode,
+        bundles,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get bundles in customer area error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch bundles in your area",
+      error: error.message,
+    });
+  }
+};
+
 exports.initializeBundleSettings = initializeBundleSettings;
