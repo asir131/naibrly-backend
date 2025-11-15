@@ -849,16 +849,33 @@ exports.getNearbyServicesByZip = async (req, res) => {
     };
 
     // Optional search on service name
-    const nameMatch = q ? { name: { $regex: q, $options: "i" } } : {};
+    const nameRegex = q ? new RegExp(q, "i") : null;
 
-    // Project each provider's servicesProvided array into separate rows
+    // Project each provider's servicesProvided array into separate rows and keep providerId
     const pipeline = [
       { $match: providerFilter },
+      {
+        $project: {
+          businessNameRegistered: 1,
+          rating: 1,
+          totalReviews: 1,
+          businessAddress: 1,
+          servicesProvided: 1,
+        },
+      },
       { $unwind: "$servicesProvided" },
-      { $replaceRoot: { newRoot: { $mergeObjects: ["$ROOT", { service: "$servicesProvided" }] } } },
-      { $project: { servicesProvided: 0, password: 0 } },
-      { $match: { "service.name": nameMatch.name || { $exists: true } } },
-      { $sort: { rating: -1, totalJobsCompleted: -1 } },
+      ...(nameRegex ? [{ $match: { "servicesProvided.name": { $regex: nameRegex } } }] : []),
+      {
+        $project: {
+          providerId: "$_id",
+          service: "$servicesProvided",
+          businessNameRegistered: 1,
+          rating: 1,
+          totalReviews: 1,
+          businessAddress: 1,
+        },
+      },
+      { $sort: { rating: -1, totalReviews: -1, "service.name": 1 } },
       { $skip: skip },
       { $limit: parseInt(limit) },
     ];
@@ -868,7 +885,7 @@ exports.getNearbyServicesByZip = async (req, res) => {
       ServiceProvider.aggregate([
         { $match: providerFilter },
         { $unwind: "$servicesProvided" },
-        { $match: { "service.name": nameMatch.name || { $exists: true } } },
+        ...(nameRegex ? [{ $match: { "servicesProvided.name": { $regex: nameRegex } } }] : []),
         { $count: "count" },
       ]),
     ]);
@@ -877,16 +894,9 @@ exports.getNearbyServicesByZip = async (req, res) => {
 
     // Map to required shape: each row is a service + provider id
     const services = items.map((doc) => ({
-      serviceName: doc.service.name,
-      hourlyRate: doc.service.hourlyRate || doc.hourlyRate || null,
-      providerId: doc._id,
-      provider: {
-        id: doc._id,
-        businessName: doc.businessNameRegistered,
-        rating: doc.rating,
-        totalReviews: doc.totalReviews,
-        businessAddress: doc.businessAddress,
-      },
+      serviceName: doc.service?.name,
+      hourlyRate: doc.service?.hourlyRate ?? null,
+      providerId: doc.providerId,
     }));
 
     res.json({
