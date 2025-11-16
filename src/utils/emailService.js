@@ -2,7 +2,7 @@ const nodemailer = require("nodemailer");
 
 // Create transporter - FIXED: Consistent function naming
 const createTransporter = () => {
-  return nodemailer.createTransport({
+  const options = {
     service: process.env.EMAIL_SERVICE || "gmail",
     host: process.env.EMAIL_HOST || "smtp.gmail.com",
     port: process.env.EMAIL_PORT || 587,
@@ -11,7 +11,14 @@ const createTransporter = () => {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
+  };
+  console.log("📧 Using email configuration:", {
+    service: options.service,
+    host: options.host,
+    port: options.port,
+    user: options.auth.user,
   });
+  return nodemailer.createTransport(options);
 };
 
 // Verify transporter connection
