@@ -51,7 +51,7 @@ exports.updateBundleDiscount = async (req, res) => {
 
     res.json({
       success: true,
-      message: `Global bundle discount updated to ${bundleDiscount}% successfully`,
+      message: `Global bundlee discount updated to ${bundleDiscount}% successfully`,
       data: { settings },
     });
   } catch (error) {
