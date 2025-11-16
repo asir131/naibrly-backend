@@ -76,11 +76,18 @@ exports.sendResetOTP = async (req, res) => {
       `${user.firstName} ${user.lastName}`
     );
 
+    // Even if email fails, return success with OTP in response for development
     if (!emailResult.success) {
-      await OTP.deleteOne({ _id: otp._id });
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP email. Please try again.",
+      console.log(`📧 OTP for ${email}: ${otpCode}`);
+      return res.json({
+        success: true,
+        message: "OTP generated successfully",
+        data: {
+          email: email,
+          otp: otpCode,
+          expiresIn: process.env.OTP_EXPIRY_MINUTES || 10,
+          warning: "Email service unavailable - OTP returned in response",
+        },
       });
     }
 
@@ -102,7 +109,7 @@ exports.sendResetOTP = async (req, res) => {
   }
 };
 
-// Verify OTP
+// Verify OTP and generate reset token
 exports.verifyOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -158,29 +165,29 @@ exports.verifyOTP = async (req, res) => {
       });
     }
 
-    // Mark OTP as used
-    otpRecord.isUsed = true;
-    await otpRecord.save();
-
     // Generate reset token (valid for 15 minutes)
     const resetToken = crypto.randomBytes(32).toString("hex");
     const resetTokenExpiry = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Store reset token in user record
-    let user = await Customer.findOne({ email });
-    if (!user) user = await ServiceProvider.findOne({ email });
-    if (!user) user = await Admin.findOne({ email });
+    // Store reset token in the OTP record instead of user model
+    otpRecord.resetToken = resetToken;
+    otpRecord.resetTokenExpires = resetTokenExpiry;
+    otpRecord.isUsed = true;
+    await otpRecord.save();
 
-    user.resetPasswordToken = resetToken;
-    user.resetPasswordExpires = resetTokenExpiry;
-    await user.save();
+    console.log("✅ Reset token stored in OTP record:", {
+      email,
+      resetToken,
+      expiresAt: resetTokenExpiry,
+    });
 
     res.json({
       success: true,
       message: "OTP verified successfully",
       data: {
-        resetToken,
-        email,
+        resetToken: resetToken,
+        email: email,
+        expiresIn: 15,
       },
     });
   } catch (error) {
@@ -197,24 +204,26 @@ exports.verifyOTP = async (req, res) => {
 exports.resetPassword = async (req, res) => {
   try {
     const { email, newPassword, confirmPassword } = req.body;
-    const resetToken = req.headers["x-resettoken"]; // Get resetToken from header
+    const resetToken =
+      req.headers["x-reset-token"] ||
+      req.headers["authorization"]?.replace("Bearer ", "");
 
-    console.log("🔍 Debug - Reset password request:", {
-      headers: req.headers,
-      body: req.body,
-      resetTokenFromHeader: resetToken,
+    console.log("🔍 Reset password request:", {
+      email,
+      resetToken: resetToken ? `${resetToken.substring(0, 10)}...` : "missing",
     });
 
-    if (!resetToken || !email || !newPassword || !confirmPassword) {
+    if (!resetToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Reset token is required in headers",
+      });
+    }
+
+    if (!email || !newPassword || !confirmPassword) {
       return res.status(400).json({
         success: false,
         message: "All fields are required",
-        missing: {
-          resetToken: !resetToken,
-          email: !email,
-          newPassword: !newPassword,
-          confirmPassword: !confirmPassword,
-        },
       });
     }
 
@@ -232,47 +241,74 @@ exports.resetPassword = async (req, res) => {
       });
     }
 
-    // Find user by email and reset token
-    let user = await Customer.findOne({
-      email,
-      resetPasswordToken: resetToken,
-      resetPasswordExpires: { $gt: new Date() },
+    // Find valid reset token in OTP collection
+    const resetRecord = await OTP.findOne({
+      email: email,
+      resetToken: resetToken,
+      resetTokenExpires: { $gt: new Date() },
+      purpose: "password_reset",
     });
 
-    if (!user) {
-      user = await ServiceProvider.findOne({
-        email,
-        resetPasswordToken: resetToken,
-        resetPasswordExpires: { $gt: new Date() },
-      });
-    }
+    console.log("🔍 Reset token verification:", {
+      email,
+      resetTokenFound: !!resetRecord,
+      tokenExpired: resetRecord
+        ? resetRecord.resetTokenExpires < new Date()
+        : false,
+      currentTime: new Date(),
+      tokenExpiry: resetRecord ? resetRecord.resetTokenExpires : null,
+    });
 
-    if (!user) {
-      user = await Admin.findOne({
-        email,
-        resetPasswordToken: resetToken,
-        resetPasswordExpires: { $gt: new Date() },
-      });
-    }
-
-    if (!user) {
+    if (!resetRecord) {
       return res.status(400).json({
         success: false,
         message: "Invalid or expired reset token",
+        debug: {
+          email: email,
+          currentTime: new Date(),
+        },
+      });
+    }
+
+    // Find user to update password
+    let user = await Customer.findOne({ email });
+    let userType = "Customer";
+
+    if (!user) {
+      user = await ServiceProvider.findOne({ email });
+      userType = "ServiceProvider";
+    }
+
+    if (!user) {
+      user = await Admin.findOne({ email });
+      userType = "Admin";
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
       });
     }
 
     // Update password
     user.password = newPassword;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
     await user.save();
 
+    // Delete the used reset token
+    await OTP.deleteOne({ _id: resetRecord._id });
+
+    console.log(`✅ Password reset successful for: ${email} (${userType})`);
+
     // Send success email
-    await sendPasswordResetSuccessEmail(
-      email,
-      `${user.firstName} ${user.lastName}`
-    );
+    try {
+      await sendPasswordResetSuccessEmail(
+        email,
+        `${user.firstName} ${user.lastName}`
+      );
+    } catch (emailError) {
+      console.error("Failed to send success email:", emailError);
+    }
 
     res.json({
       success: true,
@@ -349,11 +385,18 @@ exports.resendOTP = async (req, res) => {
       `${user.firstName} ${user.lastName}`
     );
 
+    // Even if email fails, return OTP for development
     if (!emailResult.success) {
-      await OTP.deleteOne({ _id: otp._id });
-      return res.status(500).json({
-        success: false,
-        message: "Failed to send OTP email. Please try again.",
+      console.log(`📧 Resend OTP for ${email}: ${otpCode}`);
+      return res.json({
+        success: true,
+        message: "New OTP generated successfully",
+        data: {
+          email: email,
+          otp: otpCode,
+          expiresIn: process.env.OTP_EXPIRY_MINUTES || 10,
+          warning: "Email service unavailable - OTP returned in response",
+        },
       });
     }
 
