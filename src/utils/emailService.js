@@ -1,77 +1,37 @@
 const nodemailer = require("nodemailer");
 
-// Email service configuration
 class EmailService {
   constructor() {
-    this.service = process.env.EMAIL_SERVICE || "gmail";
     this.isInitialized = false;
-    this.usingSendGrid = false;
-    this.usingResend = false;
+    this.serviceName = "None";
 
     this.initialize();
   }
 
-  // Initialize email service based on available configuration
   initialize() {
-    // Priority: SendGrid > Resend > Nodemailer
-    if (process.env.SENDGRID_API_KEY) {
-      this.initializeSendGrid();
-    } else if (process.env.RESEND_API_KEY) {
-      this.initializeResend();
-    } else if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    // Use Gmail/Nodemailer as primary
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
       this.initializeNodemailer();
     } else {
+      console.warn("⚠️ Gmail credentials not found. Email service disabled.");
       console.warn(
-        "⚠️ No email service configured. Email functionality will be disabled."
-      );
-      console.warn(
-        "   Please set SENDGRID_API_KEY, RESEND_API_KEY, or EMAIL_USER/EMAIL_PASS"
+        "   Please set EMAIL_USER and EMAIL_PASS in environment variables"
       );
     }
   }
 
-  // Initialize SendGrid
-  initializeSendGrid() {
-    try {
-      const sgMail = require("@sendgrid/mail");
-      sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-      this.sgMail = sgMail;
-      this.usingSendGrid = true;
-      this.isInitialized = true;
-      console.log("✅ SendGrid email service initialized");
-    } catch (error) {
-      console.error("❌ SendGrid initialization failed:", error.message);
-      console.log("💡 Install SendGrid: npm install @sendgrid/mail");
-    }
-  }
-
-  // Initialize Resend
-  initializeResend() {
-    try {
-      const { Resend } = require("resend");
-      this.resend = new Resend(process.env.RESEND_API_KEY);
-      this.usingResend = true;
-      this.isInitialized = true;
-      console.log("✅ Resend email service initialized");
-    } catch (error) {
-      console.error("❌ Resend initialization failed:", error.message);
-      console.log("💡 Install Resend: npm install resend");
-    }
-  }
-
-  // Initialize Nodemailer (fallback)
   initializeNodemailer() {
     try {
       this.transporter = nodemailer.createTransport({
-        service: this.service,
-        host: process.env.EMAIL_HOST || "smtp.gmail.com",
-        port: process.env.EMAIL_PORT || 587,
+        service: "gmail",
+        host: "smtp.gmail.com",
+        port: 587,
         secure: false,
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS,
         },
-        // Enhanced options for cloud platforms
+        // Optimized for cloud platforms
         connectionTimeout: 30000,
         socketTimeout: 30000,
         greetingTimeout: 30000,
@@ -80,47 +40,39 @@ class EmailService {
           rejectUnauthorized: false,
         },
       });
-      this.isInitialized = true;
-      console.log("✅ Nodemailer email service initialized");
+
+      // Verify connection
+      this.transporter.verify((error, success) => {
+        if (error) {
+          console.error(
+            "❌ Gmail/Nodemailer connection failed:",
+            error.message
+          );
+          console.log("💡 Make sure:");
+          console.log(
+            "   - EMAIL_PASS is a Gmail App Password (not your regular password)"
+          );
+          console.log("   - 2FA is enabled on your Gmail account");
+          console.log("   - App Password is generated correctly");
+        } else {
+          this.isInitialized = true;
+          this.serviceName = "Gmail/Nodemailer";
+          console.log(
+            "✅ Gmail/Nodemailer email service initialized successfully"
+          );
+          console.log(
+            `📧 From: ${process.env.EMAIL_FROM || process.env.EMAIL_USER}`
+          );
+        }
+      });
     } catch (error) {
-      console.error("❌ Nodemailer initialization failed:", error.message);
+      console.error(
+        "❌ Gmail/Nodemailer initialization failed:",
+        error.message
+      );
     }
   }
 
-  // Verify email connection
-  async verifyConnection() {
-    if (!this.isInitialized) {
-      return { success: false, error: "Email service not initialized" };
-    }
-
-    try {
-      if (this.usingSendGrid) {
-        // SendGrid doesn't have a verify method, so we'll test with a simple request
-        return { success: true, service: "SendGrid" };
-      } else if (this.usingResend) {
-        // Resend verification - try to get API key info
-        return { success: true, service: "Resend" };
-      } else {
-        // Nodemailer verification
-        await this.transporter.verify();
-        return { success: true, service: "Nodemailer" };
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        service: this.getServiceName(),
-      };
-    }
-  }
-
-  getServiceName() {
-    if (this.usingSendGrid) return "SendGrid";
-    if (this.usingResend) return "Resend";
-    return "Nodemailer";
-  }
-
-  // Send OTP email
   async sendOTPEmail(email, otp, userName) {
     if (!this.isInitialized) {
       console.warn("📧 Email service not initialized. OTP:", otp);
@@ -134,45 +86,23 @@ class EmailService {
     const emailTemplate = this.getOTPEmailTemplate(otp, userName);
 
     try {
-      if (this.usingSendGrid) {
-        return await this.sendViaSendGrid(
-          email,
-          "Password Reset OTP - Naibrly",
-          emailTemplate
-        );
-      } else if (this.usingResend) {
-        return await this.sendViaResend(
-          email,
-          "Password Reset OTP - Naibrly",
-          emailTemplate
-        );
-      } else {
-        return await this.sendViaNodemailer(
-          email,
-          "Password Reset OTP - Naibrly",
-          emailTemplate
-        );
-      }
-    } catch (error) {
-      console.error(
-        `❌ Error sending OTP email via ${this.getServiceName()}:`,
-        error.message
+      return await this.sendEmail(
+        email,
+        "Password Reset OTP - Naibrly",
+        emailTemplate
       );
+    } catch (error) {
+      console.error("❌ Error sending OTP email:", error.message);
 
-      // Don't fail completely - return OTP in response for development
-      if (process.env.NODE_ENV !== "production") {
-        return {
-          success: true,
-          warning: `Email failed but OTP returned: ${error.message}`,
-          otp: otp,
-        };
-      }
-
-      return { success: false, error: error.message };
+      // Return OTP in response as fallback
+      return {
+        success: true,
+        warning: `Email failed but OTP returned: ${error.message}`,
+        otp: otp,
+      };
     }
   }
 
-  // Send password reset success email
   async sendPasswordResetSuccessEmail(email, userName) {
     if (!this.isInitialized) {
       console.warn("📧 Email service not initialized. Skipping success email.");
@@ -182,79 +112,47 @@ class EmailService {
     const emailTemplate = this.getSuccessEmailTemplate(userName);
 
     try {
-      if (this.usingSendGrid) {
-        return await this.sendViaSendGrid(
-          email,
-          "Password Reset Successful - Naibrly",
-          emailTemplate
-        );
-      } else if (this.usingResend) {
-        return await this.sendViaResend(
-          email,
-          "Password Reset Successful - Naibrly",
-          emailTemplate
-        );
-      } else {
-        return await this.sendViaNodemailer(
-          email,
-          "Password Reset Successful - Naibrly",
-          emailTemplate
-        );
-      }
-    } catch (error) {
-      console.error(
-        `❌ Error sending success email via ${this.getServiceName()}:`,
-        error.message
+      return await this.sendEmail(
+        email,
+        "Password Reset Successful - Naibrly",
+        emailTemplate
       );
+    } catch (error) {
+      console.error("❌ Error sending success email:", error.message);
       return { success: false, error: error.message };
     }
   }
 
-  // Send via SendGrid
-  async sendViaSendGrid(email, subject, html) {
-    const msg = {
-      to: email,
-      from:
-        process.env.EMAIL_FROM ||
-        process.env.EMAIL_USER ||
-        "noreply@naibrly.com",
-      subject: subject,
-      html: html,
-    };
-
-    await this.sgMail.send(msg);
-    console.log("✅ Email sent via SendGrid to:", email);
-    return { success: true };
-  }
-
-  // Send via Resend
-  async sendViaResend(email, subject, html) {
-    const data = await this.resend.emails.send({
-      from: process.env.EMAIL_FROM || "Naibrly <onboarding@resend.dev>",
-      to: [email],
-      subject: subject,
-      html: html,
-    });
-
-    console.log("✅ Email sent via Resend to:", email);
-    return { success: true, data };
-  }
-
-  // Send via Nodemailer
-  async sendViaNodemailer(email, subject, html) {
+  async sendEmail(email, subject, html) {
     const mailOptions = {
       from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
       to: email,
       subject: subject,
       html: html,
+      text: this.htmlToText(html),
     };
 
+    console.log(`📧 Sending email to: ${email}`);
+    console.log(`📧 Using service: ${this.serviceName}`);
+
     const result = await this.transporter.sendMail(mailOptions);
-    console.log("✅ Email sent via Nodemailer to:", email);
-    return { success: true, messageId: result.messageId };
+    console.log("✅ Email sent successfully");
+    console.log(`📨 Message ID: ${result.messageId}`);
+
+    return {
+      success: true,
+      messageId: result.messageId,
+      service: this.serviceName,
+    };
   }
 
-  // Email templates
+  htmlToText(html) {
+    return html
+      .replace(/<[^>]*>/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   getOTPEmailTemplate(otp, userName) {
     return `
       <!DOCTYPE html>
@@ -320,15 +218,6 @@ class EmailService {
                   font-size: 14px; 
                   border-top: 1px solid #e2e8f0;
                   padding-top: 20px;
-              }
-              .button {
-                  display: inline-block;
-                  padding: 12px 24px;
-                  background: #2563eb;
-                  color: white;
-                  text-decoration: none;
-                  border-radius: 6px;
-                  margin: 10px 0;
               }
           </style>
       </head>
@@ -463,7 +352,7 @@ class EmailService {
 // Create singleton instance
 const emailService = new EmailService();
 
-// Legacy function exports for backward compatibility
+// Export functions
 const sendOTPEmail = async (email, otp, userName) => {
   return await emailService.sendOTPEmail(email, otp, userName);
 };
@@ -473,29 +362,34 @@ const sendPasswordResetSuccessEmail = async (email, userName) => {
 };
 
 const testEmailConfig = async () => {
-  const result = await emailService.verifyConnection();
-
-  if (result.success) {
-    console.log(`✅ Email service configured: ${result.service}`);
-  } else {
-    console.warn(`⚠️ Email service not available: ${result.error}`);
+  if (!emailService.isInitialized) {
+    return {
+      success: false,
+      error: "Email service not initialized",
+      service: emailService.serviceName,
+    };
   }
 
-  return result;
-};
+  try {
+    // Test by sending to ourselves
+    const testResult = await emailService.sendEmail(
+      process.env.EMAIL_USER,
+      "Naibrly - Email Service Test",
+      "<h1>Email Service Test</h1><p>If you receive this, your email service is working correctly!</p>"
+    );
 
-// Test email sending (for debugging)
-const testEmailSending = async (testEmail = "test@example.com") => {
-  console.log("🧪 Testing email service...");
-
-  const otpResult = await emailService.sendOTPEmail(
-    testEmail,
-    "12345",
-    "Test User"
-  );
-  console.log("OTP Email Test:", otpResult);
-
-  return otpResult;
+    return {
+      success: true,
+      service: emailService.serviceName,
+      testResult,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      service: emailService.serviceName,
+    };
+  }
 };
 
 module.exports = {
@@ -503,5 +397,4 @@ module.exports = {
   sendOTPEmail,
   sendPasswordResetSuccessEmail,
   testEmailConfig,
-  testEmailSending,
 };

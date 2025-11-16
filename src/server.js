@@ -13,8 +13,6 @@ const { uploadProfileImage } = require("./config/cloudinary");
 const { initializeBundleSettings } = require("./controllers/bundleController");
 const { initSocket } = require("./socket");
 
-
-
 // Connect to database
 connectDB();
 
@@ -154,6 +152,31 @@ app.use((err, req, res, next) => {
     message: "Something went wrong!",
     error: process.env.NODE_ENV === "production" ? {} : err.message,
   });
+});
+
+app.get("/api/debug/email-status", async (req, res) => {
+  const config = await testEmailConfig();
+  res.json(config);
+});
+
+// Test email sending
+app.post("/api/debug/test-email", async (req, res) => {
+  try {
+    const { email = process.env.EMAIL_USER } = req.body;
+
+    const result = await sendOTPEmail(email, "123456", "Test User");
+
+    res.json({
+      success: true,
+      message: "Test email sent",
+      result: result,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
 });
 
 // Handle 404
