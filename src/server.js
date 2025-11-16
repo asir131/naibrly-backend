@@ -154,29 +154,15 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.get("/api/debug/email-status", async (req, res) => {
-  const config = await testEmailConfig();
-  res.json(config);
+app.get("/api/test-email", async (req, res) => {
+  const result = await testEmailConfig();
+  res.json(result);
 });
 
-// Test email sending
-app.post("/api/debug/test-email", async (req, res) => {
-  try {
-    const { email = process.env.EMAIL_USER } = req.body;
-
-    const result = await sendOTPEmail(email, "123456", "Test User");
-
-    res.json({
-      success: true,
-      message: "Test email sent",
-      result: result,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
+// Check email service status
+app.get("/api/email-status", (req, res) => {
+  const status = getEmailServiceStatus();
+  res.json(status);
 });
 
 // Handle 404

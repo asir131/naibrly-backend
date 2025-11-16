@@ -2,269 +2,84 @@ const nodemailer = require("nodemailer");
 
 class EmailService {
   constructor() {
-    this.isInitialized = false;
-    this.serviceName = "None";
-    this.initializing = false;
-
-    // Initialize but don't block constructor
-    this.initialize();
-  }
-
-  async initialize() {
-    if (this.initializing || this.isInitialized) return;
-    this.initializing = true;
-
-    try {
-      // Use Gmail/Nodemailer as primary
-      if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-        await this.initializeNodemailer();
-      } else {
-        console.warn("⚠️ Gmail credentials not found. Email service disabled.");
-        console.warn(
-          "   Please set EMAIL_USER and EMAIL_PASS in environment variables"
-        );
-      }
-    } catch (error) {
-      console.error("❌ Email service initialization failed:", error.message);
-    } finally {
-      this.initializing = false;
-    }
-  }
-
-  async initializeNodemailer() {
-    try {
-      console.log("🔄 Initializing Gmail transporter (Render-compatible)...");
-
-      // Skip verification on Render
-      if (process.env.RENDER) {
-        console.log(
-          "🎯 Render environment detected, skipping SMTP verification"
-        );
-        this.transporter = nodemailer.createTransport({
-          service: "gmail",
-          host: "smtp.gmail.com",
-          port: 587,
-          secure: false,
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-          },
-          // No verification, shorter timeouts for Render
-          connectionTimeout: 10000,
-          socketTimeout: 10000,
-          greetingTimeout: 10000,
-          tls: {
-            rejectUnauthorized: false,
-          },
-        });
-        this.isInitialized = true;
-        this.serviceName = "Gmail (Render)";
-        console.log("✅ Gmail service initialized for Render environment");
-        console.log(
-          `📧 From: ${process.env.EMAIL_FROM || process.env.EMAIL_USER}`
-        );
-        return;
-      }
-
-      // For non-Render environments (localhost, etc.)
-      console.log(
-        "🔧 Local environment detected, using full SMTP verification"
-      );
-      const configs = [
-        {
-          host: "smtp.gmail.com",
-          port: 465,
-          secure: true,
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-          },
-          connectionTimeout: 30000,
-          socketTimeout: 30000,
-          tls: {
-            rejectUnauthorized: false,
-          },
-        },
-        {
-          host: "smtp.gmail.com",
-          port: 587,
-          secure: false,
-          auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-          },
-          connectionTimeout: 30000,
-          socketTimeout: 30000,
-          tls: {
-            rejectUnauthorized: false,
-            ciphers: "SSLv3",
-          },
-        },
-      ];
-
-      let lastError = null;
-
-      for (const config of configs) {
-        try {
-          console.log(
-            `🔧 Trying configuration: ${config.port} (secure: ${config.secure})`
-          );
-          this.transporter = nodemailer.createTransport(config);
-
-          // Verify connection with timeout
-          await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              reject(
-                new Error(`Connection verification timeout (${config.port})`)
-              );
-            }, 15000);
-
-            this.transporter.verify((error, success) => {
-              clearTimeout(timeout);
-              if (error) {
-                reject(error);
-              } else {
-                resolve(success);
-              }
-            });
-          });
-
-          this.isInitialized = true;
-          this.serviceName = `Gmail (Port ${config.port})`;
-          console.log(
-            `✅ Gmail email service initialized successfully on port ${config.port}`
-          );
-          console.log(
-            `📧 From: ${process.env.EMAIL_FROM || process.env.EMAIL_USER}`
-          );
-          return;
-        } catch (error) {
-          lastError = error;
-          console.log(`❌ Configuration ${config.port} failed:`, error.message);
-          continue;
-        }
-      }
-
-      throw lastError || new Error("All Gmail configurations failed");
-    } catch (error) {
-      console.error(
-        "❌ Gmail/Nodemailer initialization failed:",
-        error.message
-      );
-      this.isInitialized = false;
-      throw error;
-    }
+    this.isInitialized = true; // Always mark as initialized
+    this.serviceName = process.env.RENDER
+      ? "Console (Render)"
+      : "Gmail (Local)";
+    console.log(`📧 Email service initialized: ${this.serviceName}`);
   }
 
   async sendOTPEmail(email, otp, userName) {
-    // Ensure service is initialized
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
-
-    if (!this.isInitialized) {
-      console.warn("📧 Email service not initialized. OTP:", otp);
-      return {
-        success: true,
-        warning: "Email service not configured - OTP returned in response",
-        otp: otp,
-      };
-    }
-
-    const emailTemplate = this.getOTPEmailTemplate(otp, userName);
-
-    try {
-      return await this.sendEmail(
-        email,
-        "Password Reset OTP - Naibrly",
-        emailTemplate
+    if (process.env.RENDER) {
+      // On Render, just log the OTP and return it
+      console.log(`📧 [RENDER] OTP for ${email}: ${otp} - User: ${userName}`);
+      console.log(
+        `📧 [RENDER] Password reset OTP ${otp} for user: ${userName} (${email})`
       );
-    } catch (error) {
-      console.error("❌ Error sending OTP email:", error.message);
-
-      // Return OTP in response as fallback
       return {
         success: true,
-        warning: `Email failed but OTP returned: ${error.message}`,
+        warning:
+          "Email service not available on Render - OTP returned in response",
         otp: otp,
+        service: "Console",
       };
+    } else {
+      // On local, use Gmail
+      try {
+        return await this.sendEmailGmail(
+          email,
+          "Password Reset OTP - Naibrly",
+          this.getOTPEmailTemplate(otp, userName)
+        );
+      } catch (error) {
+        console.error("❌ Error sending OTP email:", error.message);
+        // Fallback: return OTP in response
+        return {
+          success: true,
+          warning: `Email failed but OTP returned: ${error.message}`,
+          otp: otp,
+          service: "Gmail (Fallback)",
+        };
+      }
     }
   }
 
   async sendPasswordResetSuccessEmail(email, userName) {
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
-
-    if (!this.isInitialized) {
-      console.warn("📧 Email service not initialized. Skipping success email.");
-      return { success: true };
-    }
-
-    const emailTemplate = this.getSuccessEmailTemplate(userName);
-
-    try {
-      return await this.sendEmail(
-        email,
-        "Password Reset Successful - Naibrly",
-        emailTemplate
+    if (process.env.RENDER) {
+      // On Render, just log the success
+      console.log(
+        `📧 [RENDER] Password reset successful for user: ${userName} (${email})`
       );
-    } catch (error) {
-      console.error("❌ Error sending success email:", error.message);
-      return { success: false, error: error.message };
-    }
-  }
-
-  async sendEmail(email, subject, html) {
-    const mailOptions = {
-      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-      to: email,
-      subject: subject,
-      html: html,
-      text: this.htmlToText(html),
-    };
-
-    console.log(`📧 Sending email to: ${email}`);
-    console.log(`📧 Using service: ${this.serviceName}`);
-    console.log(`🌍 Environment: ${process.env.RENDER ? "Render" : "Local"}`);
-
-    try {
-      const result = await this.transporter.sendMail(mailOptions);
-      console.log("✅ Email sent successfully");
-      console.log(`📨 Message ID: ${result.messageId}`);
-
       return {
         success: true,
-        messageId: result.messageId,
-        service: this.serviceName,
+        service: "Console",
+        message: "Password reset success logged (Render environment)",
       };
-    } catch (error) {
-      console.error("❌ Email sending failed:", error.message);
-
-      // If on Render and first attempt fails, try direct send without transporter
-      if (process.env.RENDER) {
-        console.log("🔄 Render: Attempting direct email send...");
-        return await this.sendEmailDirect(email, subject, html);
+    } else {
+      // On local, use Gmail
+      try {
+        return await this.sendEmailGmail(
+          email,
+          "Password Reset Successful - Naibrly",
+          this.getSuccessEmailTemplate(userName)
+        );
+      } catch (error) {
+        console.error("❌ Error sending success email:", error.message);
+        return {
+          success: false,
+          error: error.message,
+          service: "Gmail",
+        };
       }
-
-      throw error;
     }
   }
 
-  async sendEmailDirect(email, subject, html) {
-    // Create a fresh transporter for direct sending (bypass any cached issues)
-    const directTransporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
+  async sendEmailGmail(email, subject, html) {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
-      },
-      connectionTimeout: 15000,
-      socketTimeout: 15000,
-      tls: {
-        rejectUnauthorized: false,
       },
     });
 
@@ -276,18 +91,18 @@ class EmailService {
       text: this.htmlToText(html),
     };
 
-    try {
-      const result = await directTransporter.sendMail(mailOptions);
-      console.log("✅ Direct email sent successfully on Render");
-      return {
-        success: true,
-        messageId: result.messageId,
-        service: "Gmail (Direct)",
-      };
-    } catch (error) {
-      console.error("❌ Direct email also failed:", error.message);
-      throw error;
-    }
+    console.log(`📧 Sending email to: ${email}`);
+    console.log(`📧 Using service: ${this.serviceName}`);
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log("✅ Email sent via Gmail");
+    console.log(`📨 Message ID: ${result.messageId}`);
+
+    return {
+      success: true,
+      messageId: result.messageId,
+      service: "Gmail",
+    };
   }
 
   htmlToText(html) {
@@ -506,36 +321,36 @@ const sendPasswordResetSuccessEmail = async (email, userName) => {
 };
 
 const testEmailConfig = async () => {
-  if (!emailService.isInitialized) {
-    await emailService.initialize();
-  }
-
-  if (!emailService.isInitialized) {
-    return {
-      success: false,
-      error: "Email service not initialized",
-      service: emailService.serviceName,
-    };
-  }
-
-  try {
-    const testResult = await emailService.sendEmail(
-      process.env.EMAIL_USER,
-      "Naibrly - Email Service Test",
-      "<h1>Email Service Test</h1><p>If you receive this, your email service is working correctly!</p>"
-    );
-
+  if (process.env.RENDER) {
     return {
       success: true,
-      service: emailService.serviceName,
-      testResult,
+      service: "Console (Render)",
+      message:
+        "On Render - OTPs are logged to console and returned in API response",
+      environment: "Render",
     };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-      service: emailService.serviceName,
-    };
+  } else {
+    try {
+      const testResult = await emailService.sendOTPEmail(
+        process.env.EMAIL_USER,
+        "9999",
+        "Test User"
+      );
+
+      return {
+        success: true,
+        service: "Gmail (Local)",
+        testResult,
+        environment: "Local",
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message,
+        service: "Gmail (Local)",
+        environment: "Local",
+      };
+    }
   }
 };
 
@@ -543,8 +358,10 @@ const getEmailServiceStatus = () => {
   return {
     isInitialized: emailService.isInitialized,
     serviceName: emailService.serviceName,
-    isInitializing: emailService.initializing,
     environment: process.env.RENDER ? "Render" : "Local",
+    description: process.env.RENDER
+      ? "OTPs are logged to console and returned in API response"
+      : "Emails are sent via Gmail",
   };
 };
 

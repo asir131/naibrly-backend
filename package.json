@@ -8,7 +8,11 @@
     "build": "echo 'No build process'",
     "test": "echo 'No tests'"
   },
-  "keywords": ["naibrly", "backend", "api"],
+  "keywords": [
+    "naibrly",
+    "backend",
+    "api"
+  ],
   "author": "",
   "license": "ISC",
   "description": "Naibrly Backend API",
@@ -32,7 +36,7 @@
     "nodemailer": "^7.0.10",
     "nodemon": "^3.1.11",
     "qrcode": "^1.5.3",
-    "resend": "^3.2.0",
+    "resend": "^3.5.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },
