@@ -33,12 +33,45 @@ class EmailService {
 
   async initializeNodemailer() {
     try {
-      console.log("🔄 Initializing Gmail transporter...");
+      console.log("🔄 Initializing Gmail transporter (Render-compatible)...");
 
-      // Try multiple configurations
+      // Skip verification on Render
+      if (process.env.RENDER) {
+        console.log(
+          "🎯 Render environment detected, skipping SMTP verification"
+        );
+        this.transporter = nodemailer.createTransport({
+          service: "gmail",
+          host: "smtp.gmail.com",
+          port: 587,
+          secure: false,
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+          // No verification, shorter timeouts for Render
+          connectionTimeout: 10000,
+          socketTimeout: 10000,
+          greetingTimeout: 10000,
+          tls: {
+            rejectUnauthorized: false,
+          },
+        });
+        this.isInitialized = true;
+        this.serviceName = "Gmail (Render)";
+        console.log("✅ Gmail service initialized for Render environment");
+        console.log(
+          `📧 From: ${process.env.EMAIL_FROM || process.env.EMAIL_USER}`
+        );
+        return;
+      }
+
+      // For non-Render environments (localhost, etc.)
+      console.log(
+        "🔧 Local environment detected, using full SMTP verification"
+      );
       const configs = [
         {
-          // Configuration 1: Port 465 with SSL
           host: "smtp.gmail.com",
           port: 465,
           secure: true,
@@ -53,7 +86,6 @@ class EmailService {
           },
         },
         {
-          // Configuration 2: Port 587 with STARTTLS
           host: "smtp.gmail.com",
           port: 587,
           secure: false,
@@ -97,7 +129,6 @@ class EmailService {
             });
           });
 
-          // If we get here, connection is successful
           this.isInitialized = true;
           this.serviceName = `Gmail (Port ${config.port})`;
           console.log(
@@ -110,25 +141,16 @@ class EmailService {
         } catch (error) {
           lastError = error;
           console.log(`❌ Configuration ${config.port} failed:`, error.message);
-          continue; // Try next configuration
+          continue;
         }
       }
 
-      // If all configurations failed
       throw lastError || new Error("All Gmail configurations failed");
     } catch (error) {
       console.error(
         "❌ Gmail/Nodemailer initialization failed:",
         error.message
       );
-      console.log("💡 Troubleshooting tips:");
-      console.log(
-        "   - Check if EMAIL_PASS is a Gmail App Password (16 characters)"
-      );
-      console.log("   - Verify 2FA is enabled on your Gmail account");
-      console.log("   - Ensure App Password is generated correctly");
-      console.log("   - Check firewall/network restrictions");
-      console.log("   - Try allowing less secure apps temporarily");
       this.isInitialized = false;
       throw error;
     }
@@ -204,16 +226,68 @@ class EmailService {
 
     console.log(`📧 Sending email to: ${email}`);
     console.log(`📧 Using service: ${this.serviceName}`);
+    console.log(`🌍 Environment: ${process.env.RENDER ? "Render" : "Local"}`);
 
-    const result = await this.transporter.sendMail(mailOptions);
-    console.log("✅ Email sent successfully");
-    console.log(`📨 Message ID: ${result.messageId}`);
+    try {
+      const result = await this.transporter.sendMail(mailOptions);
+      console.log("✅ Email sent successfully");
+      console.log(`📨 Message ID: ${result.messageId}`);
 
-    return {
-      success: true,
-      messageId: result.messageId,
-      service: this.serviceName,
+      return {
+        success: true,
+        messageId: result.messageId,
+        service: this.serviceName,
+      };
+    } catch (error) {
+      console.error("❌ Email sending failed:", error.message);
+
+      // If on Render and first attempt fails, try direct send without transporter
+      if (process.env.RENDER) {
+        console.log("🔄 Render: Attempting direct email send...");
+        return await this.sendEmailDirect(email, subject, html);
+      }
+
+      throw error;
+    }
+  }
+
+  async sendEmailDirect(email, subject, html) {
+    // Create a fresh transporter for direct sending (bypass any cached issues)
+    const directTransporter = nodemailer.createTransport({
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false,
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+      connectionTimeout: 15000,
+      socketTimeout: 15000,
+      tls: {
+        rejectUnauthorized: false,
+      },
+    });
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: email,
+      subject: subject,
+      html: html,
+      text: this.htmlToText(html),
     };
+
+    try {
+      const result = await directTransporter.sendMail(mailOptions);
+      console.log("✅ Direct email sent successfully on Render");
+      return {
+        success: true,
+        messageId: result.messageId,
+        service: "Gmail (Direct)",
+      };
+    } catch (error) {
+      console.error("❌ Direct email also failed:", error.message);
+      throw error;
+    }
   }
 
   htmlToText(html) {
@@ -445,7 +519,6 @@ const testEmailConfig = async () => {
   }
 
   try {
-    // Test by sending to ourselves
     const testResult = await emailService.sendEmail(
       process.env.EMAIL_USER,
       "Naibrly - Email Service Test",
@@ -466,12 +539,12 @@ const testEmailConfig = async () => {
   }
 };
 
-// Function to check email service status
 const getEmailServiceStatus = () => {
   return {
     isInitialized: emailService.isInitialized,
     serviceName: emailService.serviceName,
     isInitializing: emailService.initializing,
+    environment: process.env.RENDER ? "Render" : "Local",
   };
 };
 
