@@ -13,8 +13,7 @@ const { uploadProfileImage } = require("./config/cloudinary");
 const { initializeBundleSettings } = require("./controllers/bundleController");
 const { initSocket } = require("./socket");
 
-// Load env vars
-dotenv.config();
+
 
 // Connect to database
 connectDB();
@@ -142,7 +141,14 @@ app.post("/api/debug/test-post", (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("❌ An error occurred:", {
+    message: err.message,
+    stack: err.stack,
+    method: req.method,
+    url: req.originalUrl,
+    headers: req.headers,
+    body: req.body,
+  });
   res.status(500).json({
     success: false,
     message: "Something went wrong!",
@@ -152,6 +158,12 @@ app.use((err, req, res, next) => {
 
 // Handle 404
 app.use((req, res) => {
+  console.log("🤔 Route not found:", {
+    method: req.method,
+    url: req.originalUrl,
+    headers: req.headers,
+    body: req.body,
+  });
   res.status(404).json({
     success: false,
     message: "Route not found",
