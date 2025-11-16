@@ -1,16 +1,17 @@
 {
   "name": "naibrly-backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "src/server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "build": "echo 'No build process'",
+    "test": "echo 'No tests'"
   },
-  "keywords": [],
+  "keywords": ["naibrly", "backend", "api"],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Naibrly Backend API",
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
     "bcryptjs": "^3.0.3",
@@ -29,12 +30,13 @@
     "multer": "^2.0.2",
     "multer-storage-cloudinary": "^4.0.0",
     "nodemailer": "^7.0.10",
+    "nodemon": "^3.1.11",
     "qrcode": "^1.5.3",
     "resend": "^3.2.0",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.10"
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
