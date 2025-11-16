@@ -1,115 +1,87 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 class EmailService {
   constructor() {
-    this.isInitialized = true; // Always mark as initialized
-    this.serviceName = process.env.RENDER
-      ? "Console (Render)"
-      : "Gmail (Local)";
-    console.log(`📧 Email service initialized: ${this.serviceName}`);
+    this.isInitialized = true;
+    this.serviceName = "Resend";
+    this.resend = new Resend(process.env.RESEND_API_KEY);
+    console.log("✅ Resend email service initialized");
   }
 
   async sendOTPEmail(email, otp, userName) {
-    if (process.env.RENDER) {
-      // On Render, just log the OTP and return it
-      console.log(`📧 [RENDER] OTP for ${email}: ${otp} - User: ${userName}`);
-      console.log(
-        `📧 [RENDER] Password reset OTP ${otp} for user: ${userName} (${email})`
-      );
-      return {
-        success: true,
-        warning:
-          "Email service not available on Render - OTP returned in response",
-        otp: otp,
-        service: "Console",
-      };
-    } else {
-      // On local, use Gmail
-      try {
-        return await this.sendEmailGmail(
-          email,
-          "Password Reset OTP - Naibrly",
-          this.getOTPEmailTemplate(otp, userName)
-        );
-      } catch (error) {
-        console.error("❌ Error sending OTP email:", error.message);
+    try {
+      console.log(`📧 Attempting to send OTP email to: ${email}`);
+      console.log(`📧 OTP: ${otp} for user: ${userName}`);
+
+      const { data, error } = await this.resend.emails.send({
+        from: "Naibrly <onboarding@resend.dev>",
+        to: email,
+        subject: "Password Reset OTP - Naibrly",
+        html: this.getOTPEmailTemplate(otp, userName),
+      });
+
+      if (error) {
+        console.error("❌ Resend API error:", error);
         // Fallback: return OTP in response
         return {
           success: true,
-          warning: `Email failed but OTP returned: ${error.message}`,
+          warning: `Email service temporary unavailable - OTP: ${otp}`,
           otp: otp,
-          service: "Gmail (Fallback)",
         };
       }
+
+      console.log("✅ Email sent successfully via Resend");
+      console.log(`📨 Email ID: ${data.id}`);
+
+      return {
+        success: true,
+        messageId: data.id,
+        service: "Resend",
+        message: "OTP sent successfully to your email",
+      };
+    } catch (error) {
+      console.error("❌ Unexpected error sending email:", error);
+      // Fallback: return OTP in response
+      return {
+        success: true,
+        warning: `Email service temporary unavailable - OTP: ${otp}`,
+        otp: otp,
+      };
     }
   }
 
   async sendPasswordResetSuccessEmail(email, userName) {
-    if (process.env.RENDER) {
-      // On Render, just log the success
-      console.log(
-        `📧 [RENDER] Password reset successful for user: ${userName} (${email})`
-      );
-      return {
-        success: true,
-        service: "Console",
-        message: "Password reset success logged (Render environment)",
-      };
-    } else {
-      // On local, use Gmail
-      try {
-        return await this.sendEmailGmail(
-          email,
-          "Password Reset Successful - Naibrly",
-          this.getSuccessEmailTemplate(userName)
-        );
-      } catch (error) {
-        console.error("❌ Error sending success email:", error.message);
+    try {
+      console.log(`📧 Attempting to send success email to: ${email}`);
+
+      const { data, error } = await this.resend.emails.send({
+        from: "Naibrly <onboarding@resend.dev>",
+        to: email,
+        subject: "Password Reset Successful - Naibrly",
+        html: this.getSuccessEmailTemplate(userName),
+      });
+
+      if (error) {
+        console.error("❌ Resend API error:", error);
         return {
           success: false,
           error: error.message,
-          service: "Gmail",
         };
       }
+
+      console.log("✅ Success email sent via Resend");
+      return {
+        success: true,
+        messageId: data.id,
+        service: "Resend",
+      };
+    } catch (error) {
+      console.error("❌ Error sending success email:", error);
+      return {
+        success: false,
+        error: error.message,
+      };
     }
-  }
-
-  async sendEmailGmail(email, subject, html) {
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
-    const mailOptions = {
-      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
-      to: email,
-      subject: subject,
-      html: html,
-      text: this.htmlToText(html),
-    };
-
-    console.log(`📧 Sending email to: ${email}`);
-    console.log(`📧 Using service: ${this.serviceName}`);
-
-    const result = await transporter.sendMail(mailOptions);
-    console.log("✅ Email sent via Gmail");
-    console.log(`📨 Message ID: ${result.messageId}`);
-
-    return {
-      success: true,
-      messageId: result.messageId,
-      service: "Gmail",
-    };
-  }
-
-  htmlToText(html) {
-    return html
-      .replace(/<[^>]*>/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
   }
 
   getOTPEmailTemplate(otp, userName) {
@@ -321,36 +293,24 @@ const sendPasswordResetSuccessEmail = async (email, userName) => {
 };
 
 const testEmailConfig = async () => {
-  if (process.env.RENDER) {
+  try {
+    const testResult = await emailService.sendOTPEmail(
+      process.env.TEST_EMAIL || "afaysal220@gmail.com",
+      "123456",
+      "Test User"
+    );
+
     return {
       success: true,
-      service: "Console (Render)",
-      message:
-        "On Render - OTPs are logged to console and returned in API response",
-      environment: "Render",
+      service: "Resend",
+      testResult,
     };
-  } else {
-    try {
-      const testResult = await emailService.sendOTPEmail(
-        process.env.EMAIL_USER,
-        "9999",
-        "Test User"
-      );
-
-      return {
-        success: true,
-        service: "Gmail (Local)",
-        testResult,
-        environment: "Local",
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        service: "Gmail (Local)",
-        environment: "Local",
-      };
-    }
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message,
+      service: "Resend",
+    };
   }
 };
 
@@ -359,9 +319,7 @@ const getEmailServiceStatus = () => {
     isInitialized: emailService.isInitialized,
     serviceName: emailService.serviceName,
     environment: process.env.RENDER ? "Render" : "Local",
-    description: process.env.RENDER
-      ? "OTPs are logged to console and returned in API response"
-      : "Emails are sent via Gmail",
+    description: "Using Resend.com for reliable email delivery",
   };
 };
 
