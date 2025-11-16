@@ -4,76 +4,142 @@ class EmailService {
   constructor() {
     this.isInitialized = false;
     this.serviceName = "None";
+    this.initializing = false;
 
+    // Initialize but don't block constructor
     this.initialize();
   }
 
-  initialize() {
-    // Use Gmail/Nodemailer as primary
-    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
-      this.initializeNodemailer();
-    } else {
-      console.warn("⚠️ Gmail credentials not found. Email service disabled.");
-      console.warn(
-        "   Please set EMAIL_USER and EMAIL_PASS in environment variables"
-      );
+  async initialize() {
+    if (this.initializing || this.isInitialized) return;
+    this.initializing = true;
+
+    try {
+      // Use Gmail/Nodemailer as primary
+      if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+        await this.initializeNodemailer();
+      } else {
+        console.warn("⚠️ Gmail credentials not found. Email service disabled.");
+        console.warn(
+          "   Please set EMAIL_USER and EMAIL_PASS in environment variables"
+        );
+      }
+    } catch (error) {
+      console.error("❌ Email service initialization failed:", error.message);
+    } finally {
+      this.initializing = false;
     }
   }
 
-  initializeNodemailer() {
+  async initializeNodemailer() {
     try {
-      this.transporter = nodemailer.createTransport({
-        service: "gmail",
-        host: "smtp.gmail.com",
-        port: 587,
-        secure: false,
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS,
-        },
-        // Optimized for cloud platforms
-        connectionTimeout: 30000,
-        socketTimeout: 30000,
-        greetingTimeout: 30000,
-        secureConnection: false,
-        tls: {
-          rejectUnauthorized: false,
-        },
-      });
+      console.log("🔄 Initializing Gmail transporter...");
 
-      // Verify connection
-      this.transporter.verify((error, success) => {
-        if (error) {
-          console.error(
-            "❌ Gmail/Nodemailer connection failed:",
-            error.message
-          );
-          console.log("💡 Make sure:");
+      // Try multiple configurations
+      const configs = [
+        {
+          // Configuration 1: Port 465 with SSL
+          host: "smtp.gmail.com",
+          port: 465,
+          secure: true,
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+          connectionTimeout: 30000,
+          socketTimeout: 30000,
+          tls: {
+            rejectUnauthorized: false,
+          },
+        },
+        {
+          // Configuration 2: Port 587 with STARTTLS
+          host: "smtp.gmail.com",
+          port: 587,
+          secure: false,
+          auth: {
+            user: process.env.EMAIL_USER,
+            pass: process.env.EMAIL_PASS,
+          },
+          connectionTimeout: 30000,
+          socketTimeout: 30000,
+          tls: {
+            rejectUnauthorized: false,
+            ciphers: "SSLv3",
+          },
+        },
+      ];
+
+      let lastError = null;
+
+      for (const config of configs) {
+        try {
           console.log(
-            "   - EMAIL_PASS is a Gmail App Password (not your regular password)"
+            `🔧 Trying configuration: ${config.port} (secure: ${config.secure})`
           );
-          console.log("   - 2FA is enabled on your Gmail account");
-          console.log("   - App Password is generated correctly");
-        } else {
+          this.transporter = nodemailer.createTransport(config);
+
+          // Verify connection with timeout
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              reject(
+                new Error(`Connection verification timeout (${config.port})`)
+              );
+            }, 15000);
+
+            this.transporter.verify((error, success) => {
+              clearTimeout(timeout);
+              if (error) {
+                reject(error);
+              } else {
+                resolve(success);
+              }
+            });
+          });
+
+          // If we get here, connection is successful
           this.isInitialized = true;
-          this.serviceName = "Gmail/Nodemailer";
+          this.serviceName = `Gmail (Port ${config.port})`;
           console.log(
-            "✅ Gmail/Nodemailer email service initialized successfully"
+            `✅ Gmail email service initialized successfully on port ${config.port}`
           );
           console.log(
             `📧 From: ${process.env.EMAIL_FROM || process.env.EMAIL_USER}`
           );
+          return;
+        } catch (error) {
+          lastError = error;
+          console.log(`❌ Configuration ${config.port} failed:`, error.message);
+          continue; // Try next configuration
         }
-      });
+      }
+
+      // If all configurations failed
+      throw lastError || new Error("All Gmail configurations failed");
     } catch (error) {
       console.error(
         "❌ Gmail/Nodemailer initialization failed:",
         error.message
       );
+      console.log("💡 Troubleshooting tips:");
+      console.log(
+        "   - Check if EMAIL_PASS is a Gmail App Password (16 characters)"
+      );
+      console.log("   - Verify 2FA is enabled on your Gmail account");
+      console.log("   - Ensure App Password is generated correctly");
+      console.log("   - Check firewall/network restrictions");
+      console.log("   - Try allowing less secure apps temporarily");
+      this.isInitialized = false;
+      throw error;
     }
   }
 
   async sendOTPEmail(email, otp, userName) {
+    // Ensure service is initialized
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
     if (!this.isInitialized) {
       console.warn("📧 Email service not initialized. OTP:", otp);
       return {
@@ -104,6 +170,10 @@ class EmailService {
   }
 
   async sendPasswordResetSuccessEmail(email, userName) {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
     if (!this.isInitialized) {
       console.warn("📧 Email service not initialized. Skipping success email.");
       return { success: true };
@@ -363,6 +433,10 @@ const sendPasswordResetSuccessEmail = async (email, userName) => {
 
 const testEmailConfig = async () => {
   if (!emailService.isInitialized) {
+    await emailService.initialize();
+  }
+
+  if (!emailService.isInitialized) {
     return {
       success: false,
       error: "Email service not initialized",
@@ -392,9 +466,19 @@ const testEmailConfig = async () => {
   }
 };
 
+// Function to check email service status
+const getEmailServiceStatus = () => {
+  return {
+    isInitialized: emailService.isInitialized,
+    serviceName: emailService.serviceName,
+    isInitializing: emailService.initializing,
+  };
+};
+
 module.exports = {
   emailService,
   sendOTPEmail,
   sendPasswordResetSuccessEmail,
   testEmailConfig,
+  getEmailServiceStatus,
 };
