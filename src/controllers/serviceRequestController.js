@@ -930,11 +930,13 @@ exports.getProvidersByService = async (req, res) => {
   }
 };
 
-// Nearby services by customer's ZIP code
+// Nearby services by customer's ZIP code - MATCHING SERVICE AREAS
 exports.getNearbyServicesByZip = async (req, res) => {
   try {
     const { page = 1, limit = 20, q } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    console.log("🔍 Fetching nearby services for customer ZIP code");
 
     // Load the customer to get zip code
     const customer = await Customer.findById(req.user._id).select(
@@ -945,14 +947,19 @@ exports.getNearbyServicesByZip = async (req, res) => {
         .status(404)
         .json({ success: false, message: "Customer not found" });
     }
-    const zipCode = customer.address.zipCode;
+    const customerZipCode = customer.address.zipCode;
 
-    // Find providers in same ZIP who are active and approved
+    console.log("🔍 Customer ZIP code:", customerZipCode);
+
+    // Find providers who serve customer's ZIP code in their service areas
     const providerFilter = {
       isApproved: true,
       isActive: true,
-      "businessAddress.zipCode": zipCode,
+      "serviceAreas.zipCode": customerZipCode,
+      "serviceAreas.isActive": true,
     };
+
+    console.log("🔍 Provider filter:", providerFilter);
 
     // Optional search on service name
     const nameRegex = q ? new RegExp(q, "i") : null;
@@ -967,6 +974,18 @@ exports.getNearbyServicesByZip = async (req, res) => {
           totalReviews: 1,
           businessAddress: 1,
           servicesProvided: 1,
+          serviceAreas: {
+            $filter: {
+              input: "$serviceAreas",
+              as: "area",
+              cond: {
+                $and: [
+                  { $eq: ["$$area.zipCode", customerZipCode] },
+                  { $eq: ["$$area.isActive", true] },
+                ],
+              },
+            },
+          },
         },
       },
       { $unwind: "$servicesProvided" },
@@ -981,6 +1000,7 @@ exports.getNearbyServicesByZip = async (req, res) => {
           rating: 1,
           totalReviews: 1,
           businessAddress: 1,
+          serviceAreas: 1,
         },
       },
       { $sort: { rating: -1, totalReviews: -1, "service.name": 1 } },
@@ -1002,7 +1022,11 @@ exports.getNearbyServicesByZip = async (req, res) => {
 
     const total = totalAgg.length ? totalAgg[0].count : 0;
 
-    // Map to required shape: each row is a service + provider id
+    console.log(
+      `🔍 Found ${items.length} services from providers serving ZIP ${customerZipCode}`
+    );
+
+    // Map to required shape: ONLY 3 DATA FIELDS
     const services = items.map((doc) => ({
       serviceName: doc.service?.name,
       hourlyRate: doc.service?.hourlyRate ?? null,
@@ -1012,7 +1036,7 @@ exports.getNearbyServicesByZip = async (req, res) => {
     res.json({
       success: true,
       data: {
-        zipCode,
+        zipCode: customerZipCode,
         services,
         pagination: {
           current: parseInt(page),
