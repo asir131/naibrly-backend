@@ -2,6 +2,7 @@ const ServiceRequest = require("../models/ServiceRequest");
 const ServiceProvider = require("../models/ServiceProvider");
 const Customer = require("../models/Customer");
 const Service = require("../models/Service");
+const { calculateServiceCommission } = require("./commissionController");
 
 // Helper function to get default price based on service type
 const getDefaultPrice = (serviceType) => {
@@ -85,6 +86,7 @@ exports.createServiceRequest = async (req, res) => {
       businessName: provider?.businessNameRegistered,
       servicesProvided: provider?.servicesProvided,
       servicesCount: provider?.servicesProvided?.length,
+      serviceAreas: provider?.serviceAreas,
     });
 
     if (!provider) {
@@ -98,6 +100,53 @@ exports.createServiceRequest = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "This service provider is not available",
+      });
+    }
+
+    // Get customer data
+    const customer = await Customer.findById(req.user._id);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    console.log("🔍 Debug - Customer data:", {
+      id: customer._id,
+      zipCode: customer.address.zipCode,
+      address: customer.address,
+    });
+
+    // ✅ ZIP CODE VALIDATION: Check if provider serves in customer's area
+    const customerZipCode = customer.address.zipCode;
+    const providerServesThisArea = provider.serviceAreas.some(
+      (area) => area.zipCode === customerZipCode && area.isActive
+    );
+
+    console.log("🔍 ZIP Code Validation:", {
+      customerZipCode: customerZipCode,
+      providerServiceAreas: provider.serviceAreas
+        .filter((a) => a.isActive)
+        .map((a) => a.zipCode),
+      providerServesThisArea: providerServesThisArea,
+    });
+
+    if (!providerServesThisArea) {
+      return res.status(400).json({
+        success: false,
+        message: "This provider doesn't provide services in your area",
+        details: {
+          customerZipCode: customerZipCode,
+          providerServiceAreas: provider.serviceAreas
+            .filter((area) => area.isActive)
+            .map((area) => ({
+              zipCode: area.zipCode,
+              city: area.city,
+              state: area.state,
+            })),
+          suggestion: "Please search for providers who serve your ZIP code",
+        },
       });
     }
 
@@ -155,17 +204,19 @@ exports.createServiceRequest = async (req, res) => {
 
     // Now check if provider offers these services
     const providerServices = provider.servicesProvided || [];
-    
+
     // Extract service names from provider's servicesProvided array
-    const providerServiceNames = providerServices.map((service) => {
-      // Handle both string and object formats
-      if (typeof service === 'string') {
-        return service.toLowerCase().trim();
-      } else if (service && typeof service === 'object' && service.name) {
-        return service.name.toLowerCase().trim();
-      }
-      return '';
-    }).filter(name => name);
+    const providerServiceNames = providerServices
+      .map((service) => {
+        // Handle both string and object formats
+        if (typeof service === "string") {
+          return service.toLowerCase().trim();
+        } else if (service && typeof service === "object" && service.name) {
+          return service.name.toLowerCase().trim();
+        }
+        return "";
+      })
+      .filter((name) => name);
 
     const providerValidServices = [];
     const providerInvalidServices = [];
@@ -178,7 +229,9 @@ exports.createServiceRequest = async (req, res) => {
 
       if (serviceIndex !== -1) {
         // Get the original service object from provider
-        providerValidServices.push(validServiceNames[validServiceNames.indexOf(serviceName)]);
+        providerValidServices.push(
+          validServiceNames[validServiceNames.indexOf(serviceName)]
+        );
       } else {
         providerInvalidServices.push(serviceName);
       }
@@ -192,14 +245,16 @@ exports.createServiceRequest = async (req, res) => {
 
     // If provider doesn't offer the service, return error
     if (providerInvalidServices.length > 0) {
-      const availableServiceNames = providerServices.map((service) => {
-        if (typeof service === 'string') {
-          return service;
-        } else if (service && typeof service === 'object' && service.name) {
-          return service.name;
-        }
-        return '';
-      }).filter(name => name);
+      const availableServiceNames = providerServices
+        .map((service) => {
+          if (typeof service === "string") {
+            return service;
+          } else if (service && typeof service === "object" && service.name) {
+            return service.name;
+          }
+          return "";
+        })
+        .filter((name) => name);
 
       return res.status(400).json({
         success: false,
@@ -224,15 +279,6 @@ exports.createServiceRequest = async (req, res) => {
       name: actualServiceName,
       id: actualServiceDoc?._id,
     });
-
-    // Get customer data
-    const customer = await Customer.findById(req.user._id);
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer not found",
-      });
-    }
 
     // Validate date
     let formattedDate;
@@ -284,6 +330,9 @@ exports.createServiceRequest = async (req, res) => {
       0
     );
 
+    // Calculate commission
+    const commissionCalculation = await calculateServiceCommission(totalPrice);
+
     // Create service request with all requested services
     const serviceRequest = new ServiceRequest({
       customer: req.user._id,
@@ -302,6 +351,17 @@ exports.createServiceRequest = async (req, res) => {
       ],
       price: totalPrice, // Total price for all services
       estimatedHours: totalEstimatedHours, // Total hours for all services
+      // Commission fields
+      commission: {
+        rate: commissionCalculation.commissionRate,
+        amount: commissionCalculation.commissionAmount,
+        providerAmount: commissionCalculation.providerAmount,
+      },
+      // Add location info for reference
+      locationInfo: {
+        customerZipCode: customerZipCode,
+        customerAddress: customer.address,
+      },
     });
 
     await serviceRequest.save();
@@ -309,11 +369,11 @@ exports.createServiceRequest = async (req, res) => {
     // Populate for response
     await serviceRequest.populate(
       "customer",
-      "firstName lastName email phone profileImage"
+      "firstName lastName email phone profileImage address"
     );
     await serviceRequest.populate(
       "provider",
-      "firstName lastName businessNameRegistered profileImage businessLogo phone rating servicesProvided"
+      "firstName lastName businessNameRegistered profileImage businessLogo phone rating servicesProvided serviceAreas"
     );
     await serviceRequest.populate("service", "name description categoryType");
 
@@ -337,13 +397,30 @@ exports.createServiceRequest = async (req, res) => {
           status: serviceRequest.status,
           price: serviceRequest.price,
           estimatedHours: serviceRequest.estimatedHours,
+          commission: serviceRequest.commission,
           customer: serviceRequest.customer,
           provider: serviceRequest.provider,
           createdAt: serviceRequest.createdAt,
+          locationInfo: serviceRequest.locationInfo,
         },
         requestedServices: {
           valid: providerValidServices,
           used: actualServiceName,
+        },
+        locationValidation: {
+          customerZipCode: customerZipCode,
+          providerServesArea: true,
+          providerServiceAreas: provider.serviceAreas.filter(
+            (area) => area.isActive
+          ),
+        },
+        pricing: {
+          totalPrice: serviceRequest.price,
+          commission: {
+            rate: `${commissionCalculation.commissionRate}%`,
+            amount: commissionCalculation.commissionAmount,
+          },
+          providerAmount: commissionCalculation.providerAmount,
         },
       },
     });
@@ -376,6 +453,7 @@ exports.createServiceRequest = async (req, res) => {
     });
   }
 };
+
 // Get service requests for customer
 exports.getCustomerRequests = async (req, res) => {
   try {
@@ -406,6 +484,7 @@ exports.getCustomerRequests = async (req, res) => {
       status: request.status,
       price: request.price,
       estimatedHours: request.estimatedHours,
+      commission: request.commission,
       provider: request.provider,
       createdAt: request.createdAt,
       statusHistory: request.statusHistory,
@@ -489,7 +568,11 @@ exports.getCustomerAllRequests = async (req, res) => {
     });
   } catch (error) {
     console.error("Get customer all requests error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch data", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch data",
+      error: error.message,
+    });
   }
 };
 
@@ -523,6 +606,7 @@ exports.getProviderRequests = async (req, res) => {
       status: request.status,
       price: request.price,
       estimatedHours: request.estimatedHours,
+      commission: request.commission,
       customer: request.customer,
       createdAt: request.createdAt,
       providerNotes: request.providerNotes,
@@ -550,7 +634,6 @@ exports.getProviderRequests = async (req, res) => {
 };
 
 // Enhanced update request status (provider actions - accept/complete/cancel)
-
 exports.updateRequestStatus = async (req, res) => {
   try {
     const { requestId } = req.params;
@@ -656,6 +739,7 @@ exports.updateRequestStatus = async (req, res) => {
           status: serviceRequest.status,
           previousStatus,
           scheduledDate: serviceRequest.scheduledDate,
+          commission: serviceRequest.commission,
           customer: serviceRequest.customer,
           provider: serviceRequest.provider,
           updatedAt: serviceRequest.updatedAt,
@@ -853,9 +937,13 @@ exports.getNearbyServicesByZip = async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Load the customer to get zip code
-    const customer = await Customer.findById(req.user._id).select("address.zipCode");
+    const customer = await Customer.findById(req.user._id).select(
+      "address.zipCode"
+    );
     if (!customer) {
-      return res.status(404).json({ success: false, message: "Customer not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Customer not found" });
     }
     const zipCode = customer.address.zipCode;
 
@@ -882,7 +970,9 @@ exports.getNearbyServicesByZip = async (req, res) => {
         },
       },
       { $unwind: "$servicesProvided" },
-      ...(nameRegex ? [{ $match: { "servicesProvided.name": { $regex: nameRegex } } }] : []),
+      ...(nameRegex
+        ? [{ $match: { "servicesProvided.name": { $regex: nameRegex } } }]
+        : []),
       {
         $project: {
           providerId: "$_id",
@@ -903,7 +993,9 @@ exports.getNearbyServicesByZip = async (req, res) => {
       ServiceProvider.aggregate([
         { $match: providerFilter },
         { $unwind: "$servicesProvided" },
-        ...(nameRegex ? [{ $match: { "servicesProvided.name": { $regex: nameRegex } } }] : []),
+        ...(nameRegex
+          ? [{ $match: { "servicesProvided.name": { $regex: nameRegex } } }]
+          : []),
         { $count: "count" },
       ]),
     ]);
@@ -931,7 +1023,11 @@ exports.getNearbyServicesByZip = async (req, res) => {
     });
   } catch (error) {
     console.error("Get nearby services by zip error:", error);
-    res.status(500).json({ success: false, message: "Failed to fetch nearby services", error: error.message });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch nearby services",
+      error: error.message,
+    });
   }
 };
 

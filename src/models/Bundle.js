@@ -101,6 +101,21 @@ const bundleSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    // Commission fields
+    commission: {
+      rate: {
+        type: Number,
+        default: 5,
+      },
+      amount: {
+        type: Number,
+        default: 0,
+      },
+      providerAmount: {
+        type: Number,
+        default: 0,
+      },
+    },
     status: {
       type: String,
       enum: [
@@ -114,6 +129,21 @@ const bundleSchema = new mongoose.Schema(
       ],
       default: "pending",
     },
+    statusHistory: [
+      {
+        status: String,
+        timestamp: {
+          type: Date,
+          default: Date.now,
+        },
+        note: String,
+        changedBy: {
+          type: String,
+          enum: ["customer", "provider", "system"],
+          default: "system",
+        },
+      },
+    ],
     providerOffers: [
       {
         provider: {
@@ -136,6 +166,14 @@ const bundleSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    completedAt: {
+      type: Date,
+    },
+    cancelledBy: {
+      type: String,
+      enum: ["customer", "provider"],
+    },
+    cancellationReason: String,
     shareToken: {
       type: String,
       unique: true,
@@ -151,5 +189,6 @@ bundleSchema.index({ zipCode: 1, status: 1 });
 bundleSchema.index({ category: 1, status: 1 });
 bundleSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 bundleSchema.index({ "services.name": 1 });
+bundleSchema.index({ provider: 1, status: 1 });
 
 module.exports = mongoose.model("Bundle", bundleSchema);

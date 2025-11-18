@@ -10,6 +10,10 @@ const {
   getProviderAcceptedBundles,
   getBundlesInCustomerArea,
   joinBundleViaShareToken,
+  // NEW METHODS
+  updateBundleStatus,
+  providerAcceptBundleDirect,
+  getProviderBundleStats,
 } = require("../controllers/bundleController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -36,6 +40,12 @@ router.get(
   authorize("provider"),
   getProviderAcceptedBundles
 );
+router.get(
+  "/provider/stats",
+  auth,
+  authorize("provider"),
+  getProviderBundleStats
+);
 router.post(
   "/:bundleId/provider/accept",
   auth,
@@ -43,10 +53,24 @@ router.post(
   providerAcceptBundle
 );
 router.post(
+  "/:bundleId/provider/accept-direct",
+  auth,
+  authorize("provider"),
+  providerAcceptBundleDirect
+);
+router.post(
   "/:bundleId/provider/decline",
   auth,
   authorize("provider"),
   providerDeclineBundle
+);
+
+// NEW: Provider bundle status management
+router.patch(
+  "/:bundleId/status",
+  auth,
+  authorize("provider"),
+  updateBundleStatus
 );
 
 module.exports = router;

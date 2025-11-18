@@ -48,6 +48,19 @@ const serviceRequestSchema = new mongoose.Schema(
         },
       },
     ],
+    locationInfo: {
+      customerZipCode: {
+        type: String,
+        required: true,
+      },
+      customerAddress: {
+        street: String,
+        city: String,
+        state: String,
+        zipCode: String,
+        aptSuite: String,
+      },
+    },
     problem: {
       type: String,
       required: [true, "Problem description is required"],
@@ -91,6 +104,21 @@ const serviceRequestSchema = new mongoose.Schema(
     estimatedHours: {
       type: Number,
       default: 1,
+    },
+    // Commission fields
+    commission: {
+      rate: {
+        type: Number,
+        default: 5,
+      },
+      amount: {
+        type: Number,
+        default: 0,
+      },
+      providerAmount: {
+        type: Number,
+        default: 0,
+      },
     },
     providerNotes: {
       type: String,

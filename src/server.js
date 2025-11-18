@@ -12,6 +12,9 @@ const { initializeDefaultData } = require("./controllers/categoryController");
 const { uploadProfileImage } = require("./config/cloudinary");
 const { initializeBundleSettings } = require("./controllers/bundleController");
 const { initSocket } = require("./socket");
+const {
+  initializeCommissionSettings,
+} = require("./controllers/commissionController");
 
 // Connect to database
 connectDB();
@@ -46,6 +49,9 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 initializeAdmin();
 initializeDefaultData();
 initializeBundleSettings();
+initializeCommissionSettings();
+
+app.use("/api/commission", require("./routes/commission"));
 
 // Debug route for testing uploads
 app.post(

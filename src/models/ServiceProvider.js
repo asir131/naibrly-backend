@@ -1,4 +1,3 @@
-// models/ServiceProvider.js
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
@@ -30,7 +29,16 @@ const serviceProviderSchema = new mongoose.Schema(
       type: String,
       required: [true, "Phone number is required"],
     },
-
+    profileImage: {
+      url: {
+        type: String,
+        default: "",
+      },
+      publicId: {
+        type: String,
+        default: "",
+      },
+    },
     businessLogo: {
       url: {
         type: String,
@@ -73,6 +81,32 @@ const serviceProviderSchema = new mongoose.Schema(
         default: "",
       },
     },
+    // NEW: Multiple service areas
+    serviceAreas: [
+      {
+        zipCode: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        city: {
+          type: String,
+          trim: true,
+        },
+        state: {
+          type: String,
+          trim: true,
+        },
+        isActive: {
+          type: Boolean,
+          default: true,
+        },
+        addedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     website: {
       type: String,
       default: "",
@@ -217,5 +251,8 @@ serviceProviderSchema.methods.comparePassword = async function (
 ) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
+
+// Index for service areas search
+serviceProviderSchema.index({ "serviceAreas.zipCode": 1 });
 
 module.exports = mongoose.model("ServiceProvider", serviceProviderSchema);
