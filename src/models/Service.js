@@ -17,6 +17,11 @@ const serviceSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+    defaultHourlyRate: {
+      type: Number,
+      default: 50, // Default hourly rate for this service
+      min: 0,
+    },
     isActive: {
       type: Boolean,
       default: true,

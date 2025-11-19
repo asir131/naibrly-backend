@@ -66,6 +66,23 @@ const customerSchema = new mongoose.Schema(
       type: String,
       default: "customer",
     },
+    paymentMethods: [
+      {
+        type: {
+          type: String,
+          enum: ["cash", "card", "bank_transfer", "digital_wallet"],
+        },
+        details: mongoose.Schema.Types.Mixed,
+        isDefault: {
+          type: Boolean,
+          default: false,
+        },
+      },
+    ],
+    stripeCustomerId: {
+      type: String,
+      default: "",
+    },
     isActive: {
       type: Boolean,
       default: true,

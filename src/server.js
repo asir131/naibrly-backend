@@ -53,6 +53,8 @@ initializeCommissionSettings();
 
 app.use("/api/commission", require("./routes/commission"));
 
+app.use("/api/money-requests", require("./routes/moneyRequest"));
+
 // Debug route for testing uploads
 app.post(
   "/api/debug/upload-test",
@@ -110,6 +112,8 @@ app.use("/api/providers", require("./routes/providers"));
 app.use("/api/quick-chats", require("./routes/quickChats"));
 
 app.use("/api/conversations", require("./routes/conversation"));
+
+app.use("/api/search", require("./routes/search"));
 
 // Test routes
 app.get("/health", (_req, res) => {

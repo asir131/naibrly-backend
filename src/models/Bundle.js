@@ -35,9 +35,13 @@ const bundleSchema = new mongoose.Schema(
           type: String,
           required: true,
         },
-        price: {
+        hourlyRate: {
           type: Number,
           required: true,
+        },
+        estimatedHours: {
+          type: Number,
+          default: 1,
         },
       },
     ],
@@ -78,44 +82,34 @@ const bundleSchema = new mongoose.Schema(
         customer: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "Customer",
+          required: true,
+        },
+        address: {
+          street: String,
+          city: String,
+          state: String,
+          zipCode: String,
+          aptSuite: String,
         },
         joinedAt: {
           type: Date,
           default: Date.now,
         },
+        status: {
+          type: String,
+          enum: ["active", "cancelled"],
+          default: "active",
+        },
       },
     ],
-    totalPrice: {
-      type: Number,
-      required: true,
-    },
+    // Bundle discount set by admin
     bundleDiscount: {
       type: Number,
-      default: 5,
+      default: 10, // 10% discount
+      min: 0,
+      max: 50,
     },
-    finalPrice: {
-      type: Number,
-      required: true,
-    },
-    pricePerPerson: {
-      type: Number,
-      required: true,
-    },
-    // Commission fields
-    commission: {
-      rate: {
-        type: Number,
-        default: 5,
-      },
-      amount: {
-        type: Number,
-        default: 0,
-      },
-      providerAmount: {
-        type: Number,
-        default: 0,
-      },
-    },
+    // Status for the bundle itself
     status: {
       type: String,
       enum: [
@@ -144,6 +138,31 @@ const bundleSchema = new mongoose.Schema(
         },
       },
     ],
+    pricing: {
+      originalPrice: {
+        type: Number,
+        default: 0,
+      },
+      discountAmount: {
+        type: Number,
+        default: 0,
+      },
+      finalPrice: {
+        type: Number,
+        default: 0,
+      },
+      discountPercent: {
+        type: Number,
+        default: 0,
+      },
+    },
+
+    // Also store finalPrice at root for easy queries
+    finalPrice: {
+      type: Number,
+      default: 0,
+    },
+
     providerOffers: [
       {
         provider: {
@@ -184,6 +203,35 @@ const bundleSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
+// Calculate total price for a customer (with discount)
+bundleSchema.methods.calculateCustomerPrice = function () {
+  const total = this.services.reduce((sum, service) => {
+    return sum + service.hourlyRate * service.estimatedHours;
+  }, 0);
+
+  const discountAmount = (total * this.bundleDiscount) / 100;
+  return {
+    originalPrice: total,
+    discountAmount: discountAmount,
+    finalPrice: total - discountAmount,
+    discountPercent: this.bundleDiscount,
+  };
+};
+
+// Check if bundle has available spots
+bundleSchema.methods.hasAvailableSpots = function () {
+  return this.currentParticipants < this.maxParticipants;
+};
+
+// Check if customer is already in bundle
+bundleSchema.methods.isCustomerInBundle = function (customerId) {
+  return this.participants.some(
+    (participant) =>
+      participant.customer.toString() === customerId.toString() &&
+      participant.status === "active"
+  );
+};
 
 bundleSchema.index({ zipCode: 1, status: 1 });
 bundleSchema.index({ category: 1, status: 1 });

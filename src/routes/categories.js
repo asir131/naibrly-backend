@@ -30,19 +30,5 @@ router.post(
   uploadCategoryTypeImage.single("image"), // Field name is 'image'
   createCategoryTypeWithServices
 );
-// router.post('/test-upload',
-//     uploadCategoryTypeImage.single('image'),
-//     (req, res) => {
-//         console.log('Test upload - File:', req.file);
-//         console.log('Test upload - Body:', req.body);
-
-//         res.json({
-//             success: true,
-//             message: 'Upload test successful',
-//             file: req.file,
-//             body: req.body
-//         });
-//     }
-// );
 
 module.exports = router;

@@ -3,6 +3,7 @@ const BundleSettings = require("../models/BundleSettings");
 const Customer = require("../models/Customer");
 const ServiceProvider = require("../models/ServiceProvider");
 const Service = require("../models/Service");
+const Conversation = require("../models/Conversation");
 const crypto = require("crypto");
 const QRCode = require("qrcode");
 const { calculateBundleCommission } = require("./commissionController");
@@ -21,33 +22,36 @@ const initializeBundleSettings = async () => {
   }
 };
 
-// Create a new bundle (without providerId)
+// Create a new bundle (Customer creates bundle)
 exports.createBundle = async (req, res) => {
   try {
     const {
+      title,
+      description,
       category,
       categoryTypeName,
       services, // Array of service names only
       serviceDate,
       serviceTimeStart,
       serviceTimeEnd,
-      title,
-      description,
+      zipCode,
+      address,
+      maxParticipants = 5,
     } = req.body;
 
     console.log("🔍 Debug - Bundle creation request:", {
+      title,
       category,
       categoryTypeName,
       services,
       serviceDate,
-      serviceTimeStart,
-      serviceTimeEnd,
-      title,
-      description,
+      zipCode,
+      maxParticipants,
     });
 
     // Validation
     if (
+      !title ||
       !category ||
       !categoryTypeName ||
       !services ||
@@ -61,6 +65,14 @@ exports.createBundle = async (req, res) => {
       });
     }
 
+    // Validate services array
+    if (!Array.isArray(services) || services.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one service must be provided",
+      });
+    }
+
     // Get customer (creator)
     const customer = await Customer.findById(req.user._id);
     if (!customer) {
@@ -70,163 +82,111 @@ exports.createBundle = async (req, res) => {
       });
     }
 
-    // Parse services array - only service names
-    let servicesArray = [];
-
-    if (typeof services === "string") {
-      try {
-        // Try to parse as JSON array
-        servicesArray = JSON.parse(services);
-      } catch (error) {
-        // If JSON parsing fails, try comma-separated string
-        servicesArray = services.split(",").map((s) => s.trim());
-      }
-    } else if (Array.isArray(services)) {
-      servicesArray = services;
+    // Use customer's zipCode if not provided
+    const customerZipCode = zipCode || customer.address.zipCode;
+    if (!customerZipCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ZIP code is required. Please provide zipCode or update your profile address.",
+      });
     }
 
-    // Ensure all services are strings
-    servicesArray = servicesArray
-      .map((service) => {
-        if (typeof service === "string") {
-          return service.trim();
-        } else if (service && typeof service === "object" && service.name) {
-          return service.name.trim(); // Extract name if object is passed
-        }
-        return String(service).trim(); // Fallback
-      })
-      .filter((service) => service && service.length > 0);
+    // Get bundle settings for discount
+    const bundleSettings = await BundleSettings.findOne();
+    const bundleDiscount = bundleSettings?.bundleDiscount || 10;
+    const bundleExpiryHours = bundleSettings?.bundleExpiryHours || 24;
 
-    console.log("🔍 Debug - Final services array:", servicesArray);
-
-    // Validate services exist in the system
+    // Validate services exist in the system and get default hourly rates
     const validServices = await Service.find({
-      name: { $in: servicesArray },
+      name: { $in: services },
       isActive: true,
     });
 
-    if (validServices.length !== servicesArray.length) {
+    if (validServices.length !== services.length) {
       const validServiceNames = validServices.map((s) => s.name);
-      const invalidServices = servicesArray.filter(
+      const invalidServices = services.filter(
         (service) => !validServiceNames.includes(service)
       );
 
       return res.status(400).json({
         success: false,
         message: `Invalid services: ${invalidServices.join(", ")}`,
-        debug: {
-          requested: servicesArray,
-          valid: validServiceNames,
-          invalid: invalidServices,
-        },
       });
     }
 
-    // Get bundle settings (admin set values)
-    const bundleSettings = await BundleSettings.findOne();
-    const maxParticipants = bundleSettings?.maxParticipants || 5;
-    const bundleDiscount = bundleSettings?.bundleDiscount || 5;
-    const expiryHours = bundleSettings?.bundleExpiryHours || 24;
+    // Create services array with default hourly rates
+    const servicesWithDefaultRates = validServices.map((service) => ({
+      name: service.name,
+      hourlyRate: service.defaultHourlyRate || 50, // Use service's default rate or fallback to 50
+      estimatedHours: 2, // Default estimated hours
+    }));
 
-    // Calculate pricing using average service prices from providers
-    let totalPrice = 0;
-    const servicesWithPricing = [];
+    console.log(
+      "🔍 Debug - Services with default rates:",
+      servicesWithDefaultRates
+    );
 
-    for (const serviceName of servicesArray) {
-      // Get providers who offer this service
-      const providersWithService = await ServiceProvider.find({
-        "servicesProvided.name": serviceName,
-        isApproved: true,
-        isActive: true,
-      });
+    // Calculate expiry date
+    const expiresAt = new Date(Date.now() + bundleExpiryHours * 60 * 60 * 1000);
 
-      let servicePrice = 50; // Default price if no providers found
+    // Calculate pricing BEFORE creating bundle
+    const totalPrice = servicesWithDefaultRates.reduce((sum, service) => {
+      return sum + service.hourlyRate * service.estimatedHours;
+    }, 0);
 
-      if (providersWithService.length > 0) {
-        // Calculate average price from providers who offer this service
-        const totalServicePrice = providersWithService.reduce(
-          (sum, provider) => {
-            const providerService = provider.servicesProvided.find(
-              (s) => s.name === serviceName
-            );
-            // Use provider's hourly rate for this service, or fallback to general hourly rate
-            return (
-              sum + (providerService?.hourlyRate || provider.hourlyRate || 50)
-            );
-          },
-          0
-        );
-        servicePrice = Math.round(
-          totalServicePrice / providersWithService.length
-        );
-      }
+    const discountAmount = (totalPrice * bundleDiscount) / 100;
+    const finalPrice = totalPrice - discountAmount;
 
-      // Create service object with name and calculated price
-      servicesWithPricing.push({
-        name: serviceName,
-        price: servicePrice,
-      });
-
-      totalPrice += servicePrice;
-    }
-
-    // Calculate final price using admin-set discount
-    const finalPrice = totalPrice * (1 - bundleDiscount / 100);
-    const pricePerPerson = finalPrice / maxParticipants;
-
-    // Calculate commission
-    const commissionCalculation = await calculateBundleCommission(finalPrice);
-
-    // Generate unique share token
-    const shareToken = crypto.randomBytes(16).toString("hex");
+    console.log("💰 Price calculation:", {
+      totalPrice,
+      discountAmount,
+      finalPrice,
+      bundleDiscount,
+    });
 
     // Create bundle
     const bundle = new Bundle({
       creator: customer._id,
-      title: title || `${servicesArray.join(", ")} Bundle`,
-      description:
-        description || `Bundle of ${servicesArray.join(", ")} services`,
-      category,
-      categoryTypeName,
-      services: servicesWithPricing, // Array of objects with name and calculated price
+      title: title.trim(),
+      description: description ? description.trim() : "",
+      category: category.trim(),
+      categoryTypeName: categoryTypeName.trim(),
+      services: servicesWithDefaultRates, // Use services with default rates
       serviceDate: new Date(serviceDate),
-      serviceTimeStart,
-      serviceTimeEnd,
-      zipCode: customer.address.zipCode,
-      address: {
-        street: customer.address.street,
-        city: customer.address.city,
-        state: customer.address.state,
-        aptSuite: customer.address.aptSuite,
-      },
-      maxParticipants, // Set by admin
+      serviceTimeStart: serviceTimeStart.trim(),
+      serviceTimeEnd: serviceTimeEnd.trim(),
+      zipCode: customerZipCode.trim(),
+      address: address || customer.address,
+      maxParticipants: Math.min(maxParticipants, 10),
       currentParticipants: 1,
       participants: [
         {
           customer: customer._id,
+          address: address || customer.address,
+          status: "active",
         },
       ],
-      totalPrice,
-      bundleDiscount, // Set by admin
-      finalPrice,
-      pricePerPerson,
-      // Commission fields
-      commission: {
-        rate: commissionCalculation.commissionRate,
-        amount: commissionCalculation.commissionAmount,
-        providerAmount: commissionCalculation.providerAmount,
+      bundleDiscount: bundleDiscount,
+      expiresAt: expiresAt,
+      shareToken: crypto.randomBytes(16).toString("hex"),
+      // NEW: Store pricing in database
+      pricing: {
+        originalPrice: totalPrice,
+        discountAmount: discountAmount,
+        finalPrice: finalPrice,
+        discountPercent: bundleDiscount,
       },
-      expiresAt: new Date(Date.now() + expiryHours * 60 * 60 * 1000),
-      shareToken,
+      finalPrice: finalPrice, // Also store finalPrice at root level for easy access
     });
 
-    console.log("🔍 Debug - Bundle object before save:", bundle.services);
+    console.log("🔍 Debug - Bundle object before save:", bundle);
 
     await bundle.save();
 
     // Generate shareable link and QR code
     const baseUrl = process.env.FRONTEND_URL || "http://localhost:3000";
-    const shareLink = `${baseUrl}/bundle/join/${shareToken}`;
+    const shareLink = `${baseUrl}/bundle/join/${bundle.shareToken}`;
 
     let qrCodeDataUrl;
     try {
@@ -236,45 +196,26 @@ exports.createBundle = async (req, res) => {
       qrCodeDataUrl = null;
     }
 
-    // Find matching providers and notify them
-    const matchingProviders = await ServiceProvider.find({
-      "servicesProvided.name": { $in: servicesArray },
-      "businessAddress.zipCode": customer.address.zipCode,
-      isApproved: true,
-      isActive: true,
-    });
-
-    console.log(
-      `✅ Bundle created. Notifying ${matchingProviders.length} matching providers`
-    );
-
     // Populate for response
-    await bundle.populate("creator", "firstName lastName profileImage");
+    await bundle.populate(
+      "creator",
+      "firstName lastName email phone profileImage"
+    );
 
     res.status(201).json({
       success: true,
       message:
-        "Bundle created successfully. Providers in your area will be notified.",
+        "Bundle created successfully. Other customers in your area can join.",
       data: {
-        bundle,
-        matchingProvidersCount: matchingProviders.length,
-        availableSpots: maxParticipants - 1,
-        pricing: {
-          totalPrice,
-          bundleDiscount: `${bundleDiscount}%`,
-          finalPrice,
-          pricePerPerson,
-          commission: {
-            rate: `${commissionCalculation.commissionRate}%`,
-            amount: commissionCalculation.commissionAmount,
-          },
-          providerAmount: commissionCalculation.providerAmount,
+        bundle: {
+          ...bundle.toObject(),
+          pricing: bundle.pricing, // Use stored pricing
+          availableSpots: bundle.maxParticipants - 1,
         },
-        services: servicesArray, // Return the service names used
         sharing: {
           shareLink,
           qrCode: qrCodeDataUrl,
-          shareToken,
+          shareToken: bundle.shareToken,
         },
       },
     });
@@ -290,14 +231,6 @@ exports.createBundle = async (req, res) => {
       });
     }
 
-    if (error.name === "ObjectParameterError") {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid data format for services",
-        error: "Services must be provided as an array of service names",
-      });
-    }
-
     res.status(500).json({
       success: false,
       message: "Failed to create bundle",
@@ -305,12 +238,966 @@ exports.createBundle = async (req, res) => {
     });
   }
 };
+// Join existing bundle (Other customers join)
+exports.joinBundle = async (req, res) => {
+  try {
+    const { bundleId } = req.params;
+    const { address } = req.body || {}; // Handle missing req.body
+    const customerId = req.user._id;
 
-// Provider accepts a bundle directly
-exports.providerAcceptBundle = async (req, res) => {
+    console.log("🔍 Join bundle request:", { bundleId, customerId, address });
+
+    const bundle = await Bundle.findById(bundleId);
+
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found",
+      });
+    }
+
+    // Check if bundle has available spots
+    if (!bundle.hasAvailableSpots()) {
+      return res.status(400).json({
+        success: false,
+        message: "Bundle is already full",
+      });
+    }
+
+    // Check if customer is already in bundle
+    if (bundle.isCustomerInBundle(customerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "You are already part of this bundle",
+      });
+    }
+
+    // Check if bundle is still active and not expired
+    if (bundle.status !== "pending" && bundle.status !== "accepted") {
+      return res.status(400).json({
+        success: false,
+        message: "Bundle is not accepting new participants",
+      });
+    }
+
+    if (new Date() > bundle.expiresAt) {
+      return res.status(400).json({
+        success: false,
+        message: "Bundle has expired",
+      });
+    }
+
+    // Get customer
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    // ZIP CODE VALIDATION: Check if customer is in same zip code as bundle
+    if (customer.address.zipCode !== bundle.zipCode) {
+      return res.status(400).json({
+        success: false,
+        message: "You must be in the same ZIP code area to join this bundle",
+        details: {
+          yourZipCode: customer.address.zipCode,
+          bundleZipCode: bundle.zipCode,
+        },
+      });
+    }
+
+    // Use customer's address if no address provided
+    const joinAddress = address || customer.address;
+
+    // Add customer to bundle with their own address
+    bundle.participants.push({
+      customer: customerId,
+      address: joinAddress,
+      status: "active",
+    });
+    bundle.currentParticipants += 1;
+
+    // Check if bundle is now full
+    if (bundle.currentParticipants >= bundle.maxParticipants) {
+      bundle.status = "full";
+    }
+
+    await bundle.save();
+
+    // Populate for response
+    await bundle.populate([
+      { path: "creator", select: "firstName lastName profileImage" },
+      {
+        path: "participants.customer",
+        select: "firstName lastName profileImage",
+      },
+      { path: "provider", select: "businessNameRegistered businessLogo" },
+    ]);
+
+    // Calculate pricing for the joining customer
+    const pricing = bundle.calculateCustomerPrice();
+
+    res.json({
+      success: true,
+      message: "Successfully joined the bundle",
+      data: {
+        bundle: {
+          ...bundle.toObject(),
+          pricing: pricing,
+          availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        },
+        joinedAs: {
+          customerId: customerId,
+          address: joinAddress,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Join bundle error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to join bundle",
+      error: error.message,
+    });
+  }
+};
+
+// Get available bundles by zip code (Public endpoint)
+exports.getBundlesByZipCode = async (req, res) => {
+  try {
+    const { zipCode, category, page = 1, limit = 10 } = req.query;
+
+    if (!zipCode) {
+      return res.status(400).json({
+        success: false,
+        message: "Zip code is required",
+      });
+    }
+
+    const filter = {
+      zipCode: zipCode,
+      status: { $in: ["pending", "accepted"] },
+      expiresAt: { $gt: new Date() },
+      currentParticipants: { $lt: "$maxParticipants" }, // Has available spots
+    };
+
+    if (category) {
+      filter.category = category;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [bundles, total] = await Promise.all([
+      Bundle.find(filter)
+        .populate("creator", "firstName lastName profileImage")
+        .populate("participants.customer", "firstName lastName profileImage")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Bundle.countDocuments(filter),
+    ]);
+
+    // Add pricing and available spots information to each bundle
+    const bundlesWithDetails = bundles.map((bundle) => {
+      const pricing = bundle.calculateCustomerPrice();
+      return {
+        ...bundle.toObject(),
+        pricing: pricing,
+        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        bundles: bundlesWithDetails,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get bundles by zip code error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch bundles",
+      error: error.message,
+    });
+  }
+};
+
+// Get bundle details
+exports.getBundleDetails = async (req, res) => {
+  try {
+    const { bundleId } = req.params;
+
+    const bundle = await Bundle.findById(bundleId)
+      .populate(
+        "creator",
+        "firstName lastName email phone profileImage address"
+      )
+      .populate(
+        "participants.customer",
+        "firstName lastName email phone profileImage address"
+      )
+      .populate(
+        "provider",
+        "businessNameRegistered businessLogo email phone businessAddress"
+      )
+      .populate(
+        "providerOffers.provider",
+        "businessNameRegistered businessLogo rating"
+      );
+
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found",
+      });
+    }
+
+    // Calculate pricing for a customer
+    const pricing = bundle.calculateCustomerPrice();
+
+    res.json({
+      success: true,
+      data: {
+        bundle: {
+          ...bundle.toObject(),
+          pricing: pricing,
+          availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get bundle details error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch bundle details",
+      error: error.message,
+    });
+  }
+};
+
+// Provider makes offer for bundle
+exports.makeProviderOffer = async (req, res) => {
   try {
     const { bundleId } = req.params;
     const { message } = req.body;
+    const providerId = req.user._id;
+
+    const bundle = await Bundle.findById(bundleId);
+
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found",
+      });
+    }
+
+    // Check if provider already made an offer
+    const existingOffer = bundle.providerOffers.find(
+      (offer) => offer.provider.toString() === providerId.toString()
+    );
+
+    if (existingOffer) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already made an offer for this bundle",
+      });
+    }
+
+    // Get provider details
+    const provider = await ServiceProvider.findById(providerId);
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    // Check if provider serves this zip code
+    const servesThisZip = provider.serviceAreas.some(
+      (area) => area.zipCode === bundle.zipCode && area.isActive
+    );
+
+    if (!servesThisZip) {
+      return res.status(400).json({
+        success: false,
+        message: "You do not serve in this bundle's ZIP code area",
+      });
+    }
+
+    // Add provider offer
+    bundle.providerOffers.push({
+      provider: providerId,
+      message: message || `I can provide these services for your bundle`,
+      status: "pending",
+    });
+
+    await bundle.save();
+
+    // Populate for response
+    await bundle.populate(
+      "providerOffers.provider",
+      "businessNameRegistered businessLogo rating"
+    );
+
+    res.json({
+      success: true,
+      message: "Offer submitted successfully",
+      data: {
+        bundle,
+      },
+    });
+  } catch (error) {
+    console.error("Make provider offer error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to submit offer",
+      error: error.message,
+    });
+  }
+};
+
+// Provider updates bundle status (accept, decline, complete)
+exports.updateBundleStatus = async (req, res) => {
+  try {
+    const { bundleId } = req.params;
+    const { status, message, cancellationReason } = req.body;
+    const providerId = req.user._id;
+
+    console.log("🔧 Update bundle status request:", {
+      bundleId,
+      status,
+      message,
+      providerId,
+    });
+
+    // Validate required fields
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        message: "Status is required",
+      });
+    }
+
+    // Validate status
+    const validStatuses = [
+      "accepted",
+      "declined",
+      "completed",
+      "in_progress",
+      "cancelled",
+    ];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Use: ${validStatuses.join(", ")}`,
+      });
+    }
+
+    const bundle = await Bundle.findById(bundleId);
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found",
+      });
+    }
+
+    // Get provider details
+    const provider = await ServiceProvider.findById(providerId);
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    // Check if provider serves this zip code
+    const servesThisZip = provider.serviceAreas.some(
+      (area) => area.zipCode === bundle.zipCode && area.isActive
+    );
+
+    if (!servesThisZip) {
+      return res.status(400).json({
+        success: false,
+        message: "You do not serve in this bundle's ZIP code area",
+      });
+    }
+
+    let statusNote = "";
+    let changedBy = "provider";
+
+    // Handle different status updates
+    if (status === "accepted") {
+      // Check if bundle already has a provider
+      if (
+        bundle.provider &&
+        bundle.provider.toString() !== providerId.toString()
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "This bundle is already assigned to another provider",
+        });
+      }
+
+      // Set provider and update rates
+      bundle.provider = providerId;
+      statusNote =
+        message || `Bundle accepted by ${provider.businessNameRegistered}`;
+
+      // Add to provider offers if not already there
+      const existingOffer = bundle.providerOffers.find(
+        (offer) => offer.provider.toString() === providerId.toString()
+      );
+
+      if (!existingOffer) {
+        bundle.providerOffers.push({
+          provider: providerId,
+          message:
+            message ||
+            `Provider ${provider.businessNameRegistered} accepted this bundle`,
+          status: "accepted",
+        });
+      }
+
+      // FIXED: Update bundle with provider's hourly rates and recalculate pricing
+      await exports.updateBundleWithProviderRates(bundleId, providerId);
+
+      // Recalculate pricing with provider's rates
+      const updatedBundle = await Bundle.findById(bundleId);
+      if (updatedBundle) {
+        const totalPrice = updatedBundle.services.reduce((sum, service) => {
+          return sum + service.hourlyRate * service.estimatedHours;
+        }, 0);
+
+        const discountAmount =
+          (totalPrice * updatedBundle.bundleDiscount) / 100;
+        const finalPrice = totalPrice - discountAmount;
+
+        // Update bundle pricing with provider's rates
+        updatedBundle.pricing = {
+          originalPrice: totalPrice,
+          discountAmount: discountAmount,
+          finalPrice: finalPrice,
+          discountPercent: updatedBundle.bundleDiscount,
+        };
+        updatedBundle.finalPrice = finalPrice;
+
+        await updatedBundle.save();
+        console.log("💰 Updated bundle pricing with provider rates:", {
+          totalPrice,
+          discountAmount,
+          finalPrice,
+          services: updatedBundle.services,
+        });
+      }
+
+      // Create a SINGLE conversation for the bundle
+      try {
+        const existingConversation = await Conversation.findOne({
+          bundleId: bundle._id,
+        });
+
+        if (!existingConversation) {
+          // Create one conversation for the bundle creator with provider
+          const conversation = new Conversation({
+            customerId: bundle.creator, // Bundle creator is the main customer
+            providerId: bundle.provider,
+            bundleId: bundle._id,
+            messages: [],
+            isActive: true,
+          });
+          await conversation.save();
+          console.log("✅ Created bundle conversation:", conversation._id);
+        } else {
+          console.log("✅ Bundle conversation already exists");
+        }
+      } catch (conversationError) {
+        console.error("❌ Conversation creation error:", conversationError);
+        // Don't fail the whole request if conversation creation fails
+      }
+    } else if (status === "declined") {
+      statusNote =
+        message || `Bundle declined by ${provider.businessNameRegistered}`;
+
+      // Add to provider offers as declined
+      const existingOffer = bundle.providerOffers.find(
+        (offer) => offer.provider.toString() === providerId.toString()
+      );
+
+      if (!existingOffer) {
+        bundle.providerOffers.push({
+          provider: providerId,
+          message: message || "Provider declined this bundle",
+          status: "rejected",
+        });
+      }
+    } else if (status === "in_progress") {
+      // Check if provider owns this bundle
+      if (
+        !bundle.provider ||
+        bundle.provider.toString() !== providerId.toString()
+      ) {
+        return res.status(403).json({
+          success: false,
+          message:
+            "Only the assigned provider can update bundle to in_progress",
+        });
+      }
+      statusNote = message || "Bundle work started by provider";
+    } else if (status === "completed") {
+      // Check if provider owns this bundle
+      if (
+        !bundle.provider ||
+        bundle.provider.toString() !== providerId.toString()
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the assigned provider can complete the bundle",
+        });
+      }
+      statusNote = message || "Bundle completed by provider";
+      bundle.completedAt = new Date();
+
+      // Ensure final price is set when bundle is completed
+      if (!bundle.finalPrice && bundle.pricing) {
+        bundle.finalPrice = bundle.pricing.finalPrice;
+      }
+    } else if (status === "cancelled") {
+      // Check if provider owns this bundle
+      if (
+        !bundle.provider ||
+        bundle.provider.toString() !== providerId.toString()
+      ) {
+        return res.status(403).json({
+          success: false,
+          message: "Only the assigned provider can cancel the bundle",
+        });
+      }
+      statusNote = cancellationReason || "Bundle cancelled by provider";
+      bundle.cancelledBy = "provider";
+      bundle.cancellationReason = cancellationReason || "No reason provided";
+    }
+
+    // Update bundle status
+    bundle.status = status;
+
+    // Add status history
+    if (!bundle.statusHistory) {
+      bundle.statusHistory = [];
+    }
+
+    bundle.statusHistory.push({
+      status: status,
+      note: statusNote,
+      changedBy: changedBy,
+      timestamp: new Date(),
+    });
+
+    await bundle.save();
+
+    // Populate for response
+    await bundle.populate([
+      { path: "creator", select: "firstName lastName profileImage phone" },
+      {
+        path: "participants.customer",
+        select: "firstName lastName profileImage phone",
+      },
+      {
+        path: "provider",
+        select:
+          "businessNameRegistered businessLogo rating phone email servicesProvided",
+      },
+    ]);
+
+    // Prepare response message
+    let responseMessage = `Bundle ${status} successfully`;
+    if (status === "accepted") {
+      responseMessage =
+        "Bundle accepted successfully. Pricing updated with your service rates.";
+    } else if (status === "declined") {
+      responseMessage = "Bundle declined successfully";
+    } else if (status === "in_progress") {
+      responseMessage = "Bundle marked as in progress";
+    } else if (status === "completed") {
+      responseMessage = "Bundle completed successfully";
+    } else if (status === "cancelled") {
+      responseMessage = "Bundle cancelled successfully";
+    }
+
+    res.json({
+      success: true,
+      message: responseMessage,
+      data: {
+        bundle: {
+          ...bundle.toObject(),
+          pricing: bundle.pricing, // Include updated pricing in response
+          availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        },
+        provider: {
+          id: provider._id,
+          businessName: provider.businessNameRegistered,
+          services: provider.servicesProvided, // Show provider's services for reference
+        },
+        pricingUpdate:
+          status === "accepted"
+            ? {
+                message: "Pricing updated with provider's hourly rates",
+                previousRates: "Default service rates",
+                currentRates: "Provider's specific rates",
+              }
+            : null,
+      },
+    });
+  } catch (error) {
+    console.error("Update bundle status error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update bundle status",
+      error: error.message,
+    });
+  }
+};
+
+// Get nearby bundles for customer (based on customer's zip code)
+exports.getNearbyBundlesForCustomer = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, category } = req.query;
+    const customerId = req.user._id;
+
+    console.log("🔍 Fetching nearby bundles for customer:", customerId);
+
+    // Get customer's zip code
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const customerZipCode = customer.address.zipCode;
+    console.log("🔍 Customer ZIP code:", customerZipCode);
+
+    if (!customerZipCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Customer ZIP code not found. Please update your profile address.",
+      });
+    }
+
+    // FIXED: Build proper filter for bundles in customer's zip code
+    const filter = {
+      zipCode: customerZipCode,
+      status: { $in: ["pending", "accepted"] },
+      expiresAt: { $gt: new Date() },
+      $expr: { $lt: ["$currentParticipants", "$maxParticipants"] }, // FIXED: Use $expr for field comparison
+    };
+
+    // Optional category filter
+    if (category) {
+      filter.category = category;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [bundles, total] = await Promise.all([
+      Bundle.find(filter)
+        .populate("creator", "firstName lastName profileImage address")
+        .populate(
+          "participants.customer",
+          "firstName lastName profileImage address"
+        )
+        .populate("provider", "businessNameRegistered businessLogo rating")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Bundle.countDocuments(filter),
+    ]);
+
+    console.log(`🔍 Found ${bundles.length} bundles in ZIP ${customerZipCode}`);
+
+    // Add pricing and available spots information to each bundle
+    const bundlesWithDetails = bundles.map((bundle) => {
+      const pricing = bundle.calculateCustomerPrice();
+      const isCreator = bundle.creator._id.toString() === customerId.toString();
+      const isParticipant = bundle.participants.some(
+        (p) =>
+          p.customer._id.toString() === customerId.toString() &&
+          p.status === "active"
+      );
+
+      return {
+        ...bundle.toObject(),
+        pricing: pricing,
+        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        userRole: isCreator
+          ? "creator"
+          : isParticipant
+          ? "participant"
+          : "none",
+        canJoin:
+          !isCreator &&
+          !isParticipant &&
+          bundle.currentParticipants < bundle.maxParticipants,
+      };
+    });
+
+    res.json({
+      success: true,
+      message: `Found ${bundles.length} bundles in your area`,
+      data: {
+        bundles: bundlesWithDetails,
+        customerLocation: {
+          zipCode: customerZipCode,
+          address: customer.address,
+        },
+        searchCriteria: {
+          zipCode: customerZipCode,
+          category: category || "all",
+          status: "active",
+        },
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get nearby bundles for customer error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch nearby bundles",
+      error: error.message,
+    });
+  }
+};
+
+// Update bundle with provider's hourly rates when they accept
+exports.updateBundleWithProviderRates = async (bundleId, providerId) => {
+  try {
+    const bundle = await Bundle.findById(bundleId);
+    const provider = await ServiceProvider.findById(providerId);
+
+    if (!bundle || !provider) {
+      throw new Error("Bundle or provider not found");
+    }
+
+    console.log("🔄 Updating bundle with provider rates:", {
+      bundleId,
+      providerId,
+      providerServices: provider.servicesProvided,
+      bundleServices: bundle.services,
+    });
+
+    // Update each service with provider's specific hourly rate
+    const updatedServices = bundle.services.map((service) => {
+      const providerService = provider.servicesProvided.find(
+        (sp) => sp.name.toLowerCase() === service.name.toLowerCase()
+      );
+
+      const newHourlyRate = providerService?.hourlyRate || service.hourlyRate;
+
+      console.log(`💰 Service: ${service.name}`, {
+        oldRate: service.hourlyRate,
+        newRate: newHourlyRate,
+        foundInProvider: !!providerService,
+      });
+
+      return {
+        name: service.name,
+        hourlyRate: newHourlyRate,
+        estimatedHours: service.estimatedHours || 2, // Keep existing estimated hours
+      };
+    });
+
+    bundle.services = updatedServices;
+    await bundle.save();
+
+    console.log("✅ Bundle updated with provider's hourly rates:", {
+      services: updatedServices,
+    });
+    return bundle;
+  } catch (error) {
+    console.error("Error updating bundle with provider rates:", error);
+    throw error;
+  }
+};
+
+// Customer accepts provider offer
+exports.acceptProviderOffer = async (req, res) => {
+  try {
+    const { bundleId, offerId } = req.params;
+    const customerId = req.user._id;
+
+    const bundle = await Bundle.findById(bundleId);
+
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found",
+      });
+    }
+
+    // Check if customer is the bundle creator
+    if (bundle.creator.toString() !== customerId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Only bundle creator can accept offers",
+      });
+    }
+
+    // Find and update the offer
+    const offer = bundle.providerOffers.id(offerId);
+    if (!offer) {
+      return res.status(404).json({
+        success: false,
+        message: "Offer not found",
+      });
+    }
+
+    // Accept this offer and reject others
+    bundle.providerOffers.forEach((off) => {
+      if (off._id.toString() === offerId) {
+        off.status = "accepted";
+      } else {
+        off.status = "rejected";
+      }
+    });
+
+    bundle.provider = offer.provider;
+    bundle.status = "accepted";
+
+    await bundle.save();
+
+    // Create separate conversations for each participant with provider
+    for (const participant of bundle.participants) {
+      const conversation = new Conversation({
+        customerId: participant.customer,
+        providerId: bundle.provider,
+        bundleId: bundle._id,
+        messages: [],
+        isActive: true,
+      });
+      await conversation.save();
+    }
+
+    res.json({
+      success: true,
+      message:
+        "Provider offer accepted successfully. Separate conversations created for each participant.",
+      data: {
+        bundle,
+      },
+    });
+  } catch (error) {
+    console.error("Accept provider offer error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to accept offer",
+      error: error.message,
+    });
+  }
+};
+
+// Get user's bundles (created or joined)
+exports.getUserBundles = async (req, res) => {
+  try {
+    const { type = "all", page = 1, limit = 10 } = req.query;
+    const userId = req.user._id;
+
+    let filter = {};
+
+    if (type === "created") {
+      filter = { creator: userId };
+    } else if (type === "joined") {
+      filter = {
+        "participants.customer": userId,
+        "participants.status": "active",
+        creator: { $ne: userId }, // Exclude bundles they created
+      };
+    } else {
+      // All bundles (created or joined)
+      filter = {
+        $or: [
+          { creator: userId },
+          {
+            "participants.customer": userId,
+            "participants.status": "active",
+          },
+        ],
+      };
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [bundles, total] = await Promise.all([
+      Bundle.find(filter)
+        .populate("creator", "firstName lastName profileImage")
+        .populate("participants.customer", "firstName lastName profileImage")
+        .populate("provider", "businessNameRegistered businessLogo")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Bundle.countDocuments(filter),
+    ]);
+
+    // Add pricing and role information
+    const bundlesWithDetails = bundles.map((bundle) => {
+      const pricing = bundle.calculateCustomerPrice();
+      const isCreator = bundle.creator._id.toString() === userId.toString();
+      const isParticipant = bundle.participants.some(
+        (p) =>
+          p.customer._id.toString() === userId.toString() &&
+          p.status === "active"
+      );
+
+      return {
+        ...bundle.toObject(),
+        pricing: pricing,
+        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        userRole: isCreator
+          ? "creator"
+          : isParticipant
+          ? "participant"
+          : "none",
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        bundles: bundlesWithDetails,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get user bundles error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch user bundles",
+      error: error.message,
+    });
+  }
+};
+
+// Provider accepts bundle directly
+exports.providerAcceptBundle = async (req, res) => {
+  try {
+    const { bundleId } = req.params;
+    const providerId = req.user._id;
 
     const bundle = await Bundle.findById(bundleId);
     if (!bundle) {
@@ -329,7 +1216,7 @@ exports.providerAcceptBundle = async (req, res) => {
     }
 
     // Get provider details
-    const provider = await ServiceProvider.findById(req.user._id);
+    const provider = await ServiceProvider.findById(providerId);
     if (!provider) {
       return res.status(404).json({
         success: false,
@@ -337,90 +1224,70 @@ exports.providerAcceptBundle = async (req, res) => {
       });
     }
 
-    // Check if provider is in same ZIP code and offers the services
-    if (provider.businessAddress.zipCode !== bundle.zipCode) {
-      return res.status(400).json({
-        success: false,
-        message: "You are not in the same service area as this bundle",
-      });
-    }
-
-    const bundleServiceNames = bundle.services.map((s) => s.name);
-    const providerCanService = bundleServiceNames.every((service) =>
-      provider.servicesProvided.some((sp) => sp.name === service)
+    // Check if provider serves this zip code
+    const servesThisZip = provider.serviceAreas.some(
+      (area) => area.zipCode === bundle.zipCode && area.isActive
     );
 
-    if (!providerCanService) {
+    if (!servesThisZip) {
       return res.status(400).json({
         success: false,
-        message: "You do not offer all services in this bundle",
+        message: "You do not serve in this bundle's ZIP code area",
       });
     }
 
-    // Check if provider already made an offer
-    const existingOffer = bundle.providerOffers.find(
-      (offer) => offer.provider.toString() === req.user._id.toString()
-    );
+    // Set provider and update status
+    bundle.provider = providerId;
+    bundle.status = "accepted";
 
-    if (existingOffer) {
-      return res.status(400).json({
-        success: false,
-        message: "You have already made an offer on this bundle",
-      });
-    }
-
-    // Use provider's maxBundleCapacity instead of global setting
-    const providerMaxCapacity = provider.maxBundleCapacity || 5;
-
-    // Update bundle with provider's capacity
-    bundle.maxParticipants = providerMaxCapacity;
-    bundle.pricePerPerson = bundle.finalPrice / providerMaxCapacity;
-
-    // Add provider offer and automatically accept it
+    // Add provider offer
     bundle.providerOffers.push({
-      provider: req.user._id,
-      message:
-        message ||
-        `I accept this bundle for $${bundle.finalPrice} (Capacity: ${providerMaxCapacity} people)`,
+      provider: providerId,
+      message: `Provider ${provider.businessNameRegistered} accepted this bundle directly`,
       status: "accepted",
     });
 
-    // Update bundle with accepted provider
-    bundle.provider = req.user._id;
-    bundle.status = "accepted";
+    // Add status history
+    bundle.statusHistory.push({
+      status: "accepted",
+      note: `Bundle accepted by ${provider.businessNameRegistered}`,
+      changedBy: "provider",
+      timestamp: new Date(),
+    });
 
     await bundle.save();
 
+    // Create separate conversations for each participant
+    for (const participant of bundle.participants) {
+      const conversation = new Conversation({
+        customerId: participant.customer,
+        providerId: bundle.provider,
+        bundleId: bundle._id,
+        messages: [],
+        isActive: true,
+      });
+      await conversation.save();
+    }
+
     // Populate for response
-    await bundle.populate(
-      "provider",
-      "businessNameRegistered businessLogo rating phone email"
-    );
-    await bundle.populate("creator", "firstName lastName profileImage phone");
-    await bundle.populate(
-      "participants.customer",
-      "firstName lastName profileImage"
-    );
+    await bundle.populate([
+      {
+        path: "provider",
+        select: "businessNameRegistered businessLogo rating phone email",
+      },
+      { path: "creator", select: "firstName lastName profileImage phone" },
+      {
+        path: "participants.customer",
+        select: "firstName lastName profileImage",
+      },
+    ]);
 
     res.json({
       success: true,
-      message: "Bundle accepted successfully",
+      message:
+        "Bundle accepted successfully. Separate conversations created for each participant.",
       data: {
         bundle,
-        provider: {
-          id: provider._id,
-          businessName: provider.businessNameRegistered,
-          rating: provider.rating,
-          maxBundleCapacity: providerMaxCapacity,
-        },
-        pricing: {
-          totalPrice: bundle.totalPrice,
-          bundleDiscount: `${bundle.bundleDiscount}%`,
-          finalPrice: bundle.finalPrice,
-          pricePerPerson: bundle.pricePerPerson,
-          maxParticipants: providerMaxCapacity,
-          commission: bundle.commission,
-        },
       },
     });
   } catch (error) {
@@ -433,446 +1300,12 @@ exports.providerAcceptBundle = async (req, res) => {
   }
 };
 
-// Provider declines a bundle
-exports.providerDeclineBundle = async (req, res) => {
-  try {
-    const { bundleId } = req.params;
-    const { declineReason } = req.body;
-
-    const bundle = await Bundle.findById(bundleId);
-    if (!bundle) {
-      return res.status(404).json({
-        success: false,
-        message: "Bundle not found",
-      });
-    }
-
-    // Get provider details
-    const provider = await ServiceProvider.findById(req.user._id);
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: "Provider not found",
-      });
-    }
-
-    // Check if provider is in same ZIP code
-    if (provider.businessAddress.zipCode !== bundle.zipCode) {
-      return res.status(400).json({
-        success: false,
-        message: "You are not in the same service area as this bundle",
-      });
-    }
-
-    // Add provider to declined list
-    bundle.providerOffers.push({
-      provider: req.user._id,
-      message: declineReason || "Provider declined this bundle",
-      status: "rejected",
-    });
-
-    await bundle.save();
-
-    res.json({
-      success: true,
-      message: "Bundle declined successfully",
-      data: {
-        bundleId: bundle._id,
-        providerId: provider._id,
-        businessName: provider.businessNameRegistered,
-      },
-    });
-  } catch (error) {
-    console.error("Provider decline bundle error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to decline bundle",
-      error: error.message,
-    });
-  }
-};
-
-// Join an existing bundle (customers from same ZIP can join anytime regardless of provider acceptance)
-exports.joinBundle = async (req, res) => {
-  try {
-    const { bundleId } = req.params;
-
-    const bundle = await Bundle.findById(bundleId);
-    if (!bundle) {
-      return res.status(404).json({
-        success: false,
-        message: "Bundle not found",
-      });
-    }
-
-    // Check if customer is already in the bundle
-    const isAlreadyParticipant = bundle.participants.some(
-      (participant) =>
-        participant.customer.toString() === req.user._id.toString()
-    );
-
-    if (isAlreadyParticipant) {
-      return res.status(400).json({
-        success: false,
-        message: "You are already part of this bundle",
-      });
-    }
-
-    // Check if bundle is full
-    if (bundle.currentParticipants >= bundle.maxParticipants) {
-      bundle.status = "full";
-      await bundle.save();
-
-      return res.status(400).json({
-        success: false,
-        message: "Bundle is already full",
-      });
-    }
-
-    // Get customer
-    const customer = await Customer.findById(req.user._id);
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer not found",
-      });
-    }
-
-    // ZIP CODE VALIDATION: Check if customer is in same zip code as bundle creator
-    if (customer.address.zipCode !== bundle.zipCode) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "You must be in the same ZIP code area as the bundle creator to join this bundle",
-      });
-    }
-
-    // Add customer to bundle
-    bundle.participants.push({
-      customer: customer._id,
-    });
-    bundle.currentParticipants += 1;
-
-    // If provider already accepted and capacity is provider-specific, pricePerPerson already calculated.
-    // If provider has not accepted yet, keep existing maxParticipants and pricePerPerson (based on settings).
-
-    // Check if bundle is now full
-    if (bundle.currentParticipants >= bundle.maxParticipants) {
-      bundle.status = "full";
-    }
-
-    await bundle.save();
-
-    // Populate for response
-    await bundle.populate(
-      "participants.customer",
-      "firstName lastName profileImage address"
-    );
-    await bundle.populate("creator", "firstName lastName profileImage address");
-    await bundle.populate(
-      "provider",
-      "businessNameRegistered businessLogo rating"
-    );
-
-    res.json({
-      success: true,
-      message: "Successfully joined the bundle",
-      data: {
-        bundle,
-        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
-        yourShare: bundle.pricePerPerson,
-        pricing: {
-          totalPrice: bundle.totalPrice,
-          bundleDiscount: `${bundle.bundleDiscount}%`,
-          finalPrice: bundle.finalPrice,
-          pricePerPerson: bundle.pricePerPerson,
-          commission: bundle.commission,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Join bundle error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to join bundle",
-      error: error.message,
-    });
-  }
-};
-
-// Get available bundles for providers (matching services and ZIP code)
-exports.getProviderAvailableBundles = async (req, res) => {
-  try {
-    const { status = "pending", page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
-
-    // Get provider details
-    const provider = await ServiceProvider.findById(req.user._id);
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: "Provider not found",
-      });
-    }
-
-    // Find bundles that match provider's services and ZIP code
-    const filter = {
-      zipCode: provider.businessAddress.zipCode,
-      status: status,
-      expiresAt: { $gt: new Date() },
-      $or: [
-        {
-          "services.name": {
-            $in: provider.servicesProvided.map((s) => s.name),
-          },
-        },
-        { "providerOffers.provider": { $ne: req.user._id } },
-      ],
-    };
-
-    const bundles = await Bundle.find(filter)
-      .populate("creator", "firstName lastName profileImage address")
-      .populate(
-        "participants.customer",
-        "firstName lastName profileImage address"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Bundle.countDocuments(filter);
-
-    // Enhance bundles with match score
-    const enhancedBundles = bundles.map((bundle) => {
-      const matchingServices = bundle.services.filter((service) =>
-        provider.servicesProvided.some((sp) => sp.name === service.name)
-      );
-      const matchScore =
-        (matchingServices.length / bundle.services.length) * 100;
-
-      return {
-        ...bundle.toObject(),
-        matchScore: Math.round(matchScore),
-        matchingServices: matchingServices.map((s) => s.name),
-        providerAlreadyOffered: bundle.providerOffers.some(
-          (offer) => offer.provider.toString() === req.user._id.toString()
-        ),
-      };
-    });
-
-    res.json({
-      success: true,
-      data: {
-        bundles: enhancedBundles,
-        providerZipCode: provider.businessAddress.zipCode,
-        providerServices: provider.servicesProvided.map((s) => s.name),
-        pagination: {
-          current: parseInt(page),
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Get provider available bundles error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch available bundles",
-      error: error.message,
-    });
-  }
-};
-
-// Get provider's accepted bundles
-exports.getProviderAcceptedBundles = async (req, res) => {
-  try {
-    const { status = "accepted", page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const filter = {
-      provider: req.user._id,
-      status: status,
-    };
-
-    const bundles = await Bundle.find(filter)
-      .populate("creator", "firstName lastName profileImage address phone")
-      .populate(
-        "participants.customer",
-        "firstName lastName profileImage phone"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Bundle.countDocuments(filter);
-
-    res.json({
-      success: true,
-      data: {
-        bundles,
-        pagination: {
-          current: parseInt(page),
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Get provider accepted bundles error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch accepted bundles",
-      error: error.message,
-    });
-  }
-};
-
-// Get customer's created bundles
-exports.getCustomerBundles = async (req, res) => {
-  try {
-    const { status, page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const filter = { creator: req.user._id };
-    if (status) filter.status = status;
-
-    const bundles = await Bundle.find(filter)
-      .populate(
-        "participants.customer",
-        "firstName lastName profileImage address"
-      )
-      .populate("provider", "businessNameRegistered businessLogo rating")
-      .populate(
-        "providerOffers.provider",
-        "businessNameRegistered businessLogo rating"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Bundle.countDocuments(filter);
-
-    res.json({
-      success: false,
-      data: {
-        bundles,
-        pagination: {
-          current: parseInt(page),
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Get customer bundles error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch bundles",
-      error: error.message,
-    });
-  }
-};
-
-// Get bundle details
-exports.getBundleDetails = async (req, res) => {
-  try {
-    const { bundleId } = req.params;
-
-    const bundle = await Bundle.findById(bundleId)
-      .populate("creator", "firstName lastName profileImage address phone")
-      .populate(
-        "participants.customer",
-        "firstName lastName profileImage phone address"
-      )
-      .populate(
-        "provider",
-        "businessNameRegistered businessLogo rating phone email businessAddress"
-      )
-      .populate(
-        "providerOffers.provider",
-        "businessNameRegistered businessLogo rating"
-      );
-
-    if (!bundle) {
-      return res.status(404).json({
-        success: false,
-        message: "Bundle not found",
-      });
-    }
-
-    res.json({
-      success: true,
-      data: { bundle },
-    });
-  } catch (error) {
-    console.error("Get bundle details error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch bundle details",
-      error: error.message,
-    });
-  }
-};
-
-// Get bundles available in the authenticated customer's ZIP code
-exports.getBundlesInCustomerArea = async (req, res) => {
-  try {
-    const { status, page = 1, limit = 10 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    // Fetch customer to get ZIP code
-    const customer = await Customer.findById(req.user._id);
-    if (!customer) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Customer not found" });
-    }
-
-    const filter = {
-      zipCode: customer.address.zipCode,
-      expiresAt: { $gt: new Date() },
-    };
-    if (status) filter.status = status; // optional status filter
-
-    const bundles = await Bundle.find(filter)
-      .populate("creator", "firstName lastName profileImage address")
-      .populate("provider", "businessNameRegistered businessLogo rating")
-      .populate(
-        "participants.customer",
-        "firstName lastName profileImage address"
-      )
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    const total = await Bundle.countDocuments(filter);
-
-    res.json({
-      success: true,
-      data: {
-        zipCode: customer.address.zipCode,
-        bundles,
-        pagination: {
-          current: parseInt(page),
-          total,
-          pages: Math.ceil(total / parseInt(limit)),
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Get bundles in customer area error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch bundles in your area",
-      error: error.message,
-    });
-  }
-};
-
-// Join bundle via share token (public endpoint for customers in same ZIP)
+// Join bundle via share token
 exports.joinBundleViaShareToken = async (req, res) => {
   try {
     const { shareToken } = req.params;
+    const { address } = req.body;
+    const customerId = req.user._id;
 
     // Find bundle by share token
     const bundle = await Bundle.findOne({ shareToken });
@@ -891,524 +1324,20 @@ exports.joinBundleViaShareToken = async (req, res) => {
       });
     }
 
-    // Check if customer is already in the bundle
-    const isAlreadyParticipant = bundle.participants.some(
-      (participant) =>
-        participant.customer.toString() === req.user._id.toString()
-    );
-
-    if (isAlreadyParticipant) {
-      return res.status(400).json({
-        success: false,
-        message: "You are already part of this bundle",
-      });
-    }
-
-    // Check if bundle is full
-    if (bundle.currentParticipants >= bundle.maxParticipants) {
-      bundle.status = "full";
-      await bundle.save();
-
-      return res.status(400).json({
-        success: false,
-        message: "Bundle is already full",
-      });
-    }
-
-    // Get customer
-    const customer = await Customer.findById(req.user._id);
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer not found",
-      });
-    }
-
-    // ZIP CODE VALIDATION: Check if customer is in same zip code as bundle creator
-    if (customer.address.zipCode !== bundle.zipCode) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "You must be in the same ZIP code area as the bundle creator to join this bundle",
-      });
-    }
-
-    // Add customer to bundle
-    bundle.participants.push({
-      customer: customer._id,
-    });
-    bundle.currentParticipants += 1;
-
-    // Check if bundle is now full
-    if (bundle.currentParticipants >= bundle.maxParticipants) {
-      bundle.status = "full";
-    }
-
-    await bundle.save();
-
-    // Populate for response
-    await bundle.populate(
-      "participants.customer",
-      "firstName lastName profileImage address"
-    );
-    await bundle.populate("creator", "firstName lastName profileImage address");
-    await bundle.populate(
-      "provider",
-      "businessNameRegistered businessLogo rating"
-    );
-
-    res.json({
-      success: true,
-      message: "Successfully joined the bundle via share link",
-      data: {
-        bundle,
-        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
-        yourShare: bundle.pricePerPerson,
-        pricing: {
-          totalPrice: bundle.totalPrice,
-          bundleDiscount: `${bundle.bundleDiscount}%`,
-          finalPrice: bundle.finalPrice,
-          pricePerPerson: bundle.pricePerPerson,
-          commission: bundle.commission,
-        },
+    // Use the join bundle logic
+    return exports.joinBundle(
+      {
+        params: { bundleId: bundle._id },
+        body: { address },
+        user: { _id: customerId },
       },
-    });
+      res
+    );
   } catch (error) {
     console.error("Join bundle via share token error:", error);
     res.status(500).json({
       success: false,
       message: "Failed to join bundle",
-      error: error.message,
-    });
-  }
-};
-
-// Update bundle status (Provider actions: accept, complete, cancel) - WITH ZIP CODE VALIDATION
-exports.updateBundleStatus = async (req, res) => {
-  try {
-    const { bundleId } = req.params;
-    const { status, cancellationReason } = req.body;
-
-    console.log("🔧 Update bundle status request:", {
-      bundleId,
-      status,
-      cancellationReason,
-      providerId: req.user._id,
-    });
-
-    // Validate required fields
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: "Status is required",
-      });
-    }
-
-    // Validate status
-    const validStatuses = ["accepted", "completed", "cancelled", "in_progress"];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid status. Use: ${validStatuses.join(", ")}`,
-      });
-    }
-
-    const bundle = await Bundle.findById(bundleId);
-    if (!bundle) {
-      return res.status(404).json({
-        success: false,
-        message: "Bundle not found",
-      });
-    }
-
-    // Get provider details to check ZIP code
-    const provider = await ServiceProvider.findById(req.user._id);
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: "Provider not found",
-      });
-    }
-
-    // ✅ ZIP CODE VALIDATION: Check if provider serves this zip code
-    const servesThisZip = provider.serviceAreas.some(
-      (area) => area.zipCode === bundle.zipCode && area.isActive
-    );
-
-    if (!servesThisZip) {
-      return res.status(400).json({
-        success: false,
-        message: "You do not serve in this bundle's service area (ZIP code)",
-        details: {
-          providerServiceAreas: provider.serviceAreas
-            .filter((area) => area.isActive)
-            .map((area) => area.zipCode),
-          bundleZipCode: bundle.zipCode,
-        },
-      });
-    }
-
-    // SPECIAL CASE: When accepting a bundle, assign the provider
-    if (status === "accepted") {
-      // If bundle doesn't have a provider, assign the current provider
-      if (!bundle.provider) {
-        bundle.provider = req.user._id;
-
-        // Add to provider offers if not already there
-        const existingOffer = bundle.providerOffers.find(
-          (offer) => offer.provider.toString() === req.user._id.toString()
-        );
-
-        if (!existingOffer) {
-          bundle.providerOffers.push({
-            provider: req.user._id,
-            message: `Provider ${provider.businessNameRegistered} accepted this bundle`,
-            status: "accepted",
-          });
-        }
-      }
-      // If bundle already has a provider, check if it's the same provider
-      else if (bundle.provider.toString() !== req.user._id.toString()) {
-        return res.status(403).json({
-          success: false,
-          message: "This bundle is already assigned to another provider",
-        });
-      }
-    }
-    // For other status changes, check if provider owns this bundle
-    else if (
-      bundle.provider &&
-      bundle.provider.toString() !== req.user._id.toString()
-    ) {
-      return res.status(403).json({
-        success: false,
-        message:
-          "Not authorized to update this bundle - you are not the assigned provider",
-      });
-    }
-
-    // Validate current status transitions
-    const validTransitions = {
-      pending: ["accepted", "cancelled"],
-      accepted: ["in_progress", "completed", "cancelled"],
-      in_progress: ["completed", "cancelled"],
-      completed: [],
-      cancelled: [],
-      full: ["accepted", "in_progress", "completed", "cancelled"],
-    };
-
-    if (!validTransitions[bundle.status]?.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Cannot change status from ${bundle.status} to ${status}`,
-      });
-    }
-
-    // Store previous status for response
-    const previousStatus = bundle.status;
-
-    // Update bundle status
-    bundle.status = status;
-
-    // Add status history
-    if (!bundle.statusHistory) {
-      bundle.statusHistory = [];
-    }
-
-    let statusNote = "";
-    let changedBy = "provider";
-
-    if (status === "accepted") {
-      statusNote = `Bundle accepted by ${provider.businessNameRegistered}`;
-    } else if (status === "in_progress") {
-      statusNote = "Bundle work started by provider";
-    } else if (status === "completed") {
-      statusNote = "Bundle completed by provider";
-      bundle.completedAt = new Date();
-    } else if (status === "cancelled") {
-      // Make cancellationReason optional - use default if not provided
-      statusNote = cancellationReason || "Bundle cancelled by provider";
-      bundle.cancelledBy = "provider";
-      bundle.cancellationReason = cancellationReason || "No reason provided";
-    }
-
-    bundle.statusHistory.push({
-      status: status,
-      note: statusNote,
-      changedBy: changedBy,
-      timestamp: new Date(),
-    });
-
-    await bundle.save();
-
-    // Populate for response
-    await bundle.populate("creator", "firstName lastName profileImage phone");
-    await bundle.populate(
-      "participants.customer",
-      "firstName lastName profileImage phone"
-    );
-    await bundle.populate(
-      "provider",
-      "businessNameRegistered businessLogo rating phone email businessAddress"
-    );
-
-    // Prepare response message
-    let message = `Bundle ${status} successfully`;
-    if (status === "accepted") {
-      message = "Bundle accepted successfully";
-    } else if (status === "in_progress") {
-      message = "Bundle marked as in progress";
-    } else if (status === "completed") {
-      message = "Bundle completed successfully";
-    } else if (status === "cancelled") {
-      message = "Bundle cancelled successfully";
-    }
-
-    console.log(
-      `✅ Bundle ${bundleId} status updated from ${previousStatus} to ${status} by provider in ZIP ${provider.businessAddress.zipCode}`
-    );
-
-    res.json({
-      success: true,
-      message,
-      data: {
-        bundle: {
-          _id: bundle._id,
-          title: bundle.title,
-          status: bundle.status,
-          previousStatus,
-          provider: bundle.provider,
-          creator: bundle.creator,
-          participants: bundle.participants,
-          finalPrice: bundle.finalPrice,
-          commission: bundle.commission,
-          completedAt: bundle.completedAt,
-          statusHistory: bundle.statusHistory,
-          zipCode: bundle.zipCode,
-        },
-        providerZipCode: provider.businessAddress.zipCode,
-      },
-    });
-  } catch (error) {
-    console.error("Update bundle status error:", error);
-
-    if (error.name === "ValidationError") {
-      const errors = Object.values(error.errors).map((err) => err.message);
-      return res.status(400).json({
-        success: false,
-        message: "Validation failed",
-        errors: errors,
-      });
-    }
-
-    if (error.name === "CastError") {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid bundle ID format",
-      });
-    }
-
-    res.status(500).json({
-      success: false,
-      message: "Failed to update bundle status",
-      error: error.message,
-    });
-  }
-};
-
-// Provider accepts a specific bundle (alternative to providerAcceptBundle)
-exports.providerAcceptBundleDirect = async (req, res) => {
-  try {
-    const { bundleId } = req.params;
-
-    const bundle = await Bundle.findById(bundleId);
-    if (!bundle) {
-      return res.status(404).json({
-        success: false,
-        message: "Bundle not found",
-      });
-    }
-
-    // Check if bundle is still available
-    if (bundle.status !== "pending" && bundle.status !== "full") {
-      return res.status(400).json({
-        success: false,
-        message: "Bundle is no longer available for acceptance",
-      });
-    }
-
-    // Get provider details
-    const provider = await ServiceProvider.findById(req.user._id);
-    if (!provider) {
-      return res.status(404).json({
-        success: false,
-        message: "Provider not found",
-      });
-    }
-
-    // Check if provider is in same ZIP code and offers the services
-    if (provider.businessAddress.zipCode !== bundle.zipCode) {
-      return res.status(400).json({
-        success: false,
-        message: "You are not in the same service area as this bundle",
-      });
-    }
-
-    const bundleServiceNames = bundle.services.map((s) => s.name);
-    const providerCanService = bundleServiceNames.every((service) =>
-      provider.servicesProvided.some((sp) => sp.name === service)
-    );
-
-    if (!providerCanService) {
-      return res.status(400).json({
-        success: false,
-        message: "You do not offer all services in this bundle",
-      });
-    }
-
-    // Check if provider already made an offer
-    const existingOffer = bundle.providerOffers.find(
-      (offer) => offer.provider.toString() === req.user._id.toString()
-    );
-
-    // Set provider and update status
-    bundle.provider = req.user._id;
-    bundle.status = "accepted";
-
-    // Add to provider offers if not already there
-    if (!existingOffer) {
-      bundle.providerOffers.push({
-        provider: req.user._id,
-        message: `Provider ${provider.businessNameRegistered} accepted this bundle`,
-        status: "accepted",
-      });
-    }
-
-    // Add status history
-    if (!bundle.statusHistory) {
-      bundle.statusHistory = [];
-    }
-
-    bundle.statusHistory.push({
-      status: "accepted",
-      note: `Bundle accepted by ${provider.businessNameRegistered}`,
-      changedBy: "provider",
-      timestamp: new Date(),
-    });
-
-    await bundle.save();
-
-    // Populate for response
-    await bundle.populate(
-      "provider",
-      "businessNameRegistered businessLogo rating phone email"
-    );
-    await bundle.populate("creator", "firstName lastName profileImage phone");
-    await bundle.populate(
-      "participants.customer",
-      "firstName lastName profileImage"
-    );
-
-    res.json({
-      success: true,
-      message: "Bundle accepted successfully",
-      data: {
-        bundle,
-        provider: {
-          id: provider._id,
-          businessName: provider.businessNameRegistered,
-          rating: provider.rating,
-          maxBundleCapacity: provider.maxBundleCapacity,
-        },
-        pricing: {
-          totalPrice: bundle.totalPrice,
-          bundleDiscount: `${bundle.bundleDiscount}%`,
-          finalPrice: bundle.finalPrice,
-          pricePerPerson: bundle.pricePerPerson,
-          maxParticipants: bundle.maxParticipants,
-          commission: bundle.commission,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Provider accept bundle direct error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to accept bundle",
-      error: error.message,
-    });
-  }
-};
-
-// Get provider's bundle statistics
-exports.getProviderBundleStats = async (req, res) => {
-  try {
-    const providerId = req.user._id;
-
-    const stats = await Bundle.aggregate([
-      { $match: { provider: new mongoose.Types.ObjectId(providerId) } },
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-          totalRevenue: { $sum: "$finalPrice" },
-          totalCommission: { $sum: "$commission.amount" },
-        },
-      },
-    ]);
-
-    // Format stats
-    const statusCounts = {
-      pending: 0,
-      accepted: 0,
-      in_progress: 0,
-      completed: 0,
-      cancelled: 0,
-      total: 0,
-    };
-
-    const revenueStats = {
-      totalRevenue: 0,
-      totalCommission: 0,
-      netEarnings: 0,
-    };
-
-    stats.forEach((stat) => {
-      statusCounts[stat._id] = stat.count;
-      statusCounts.total += stat.count;
-
-      if (stat._id === "completed") {
-        revenueStats.totalRevenue += stat.totalRevenue || 0;
-        revenueStats.totalCommission += stat.totalCommission || 0;
-        revenueStats.netEarnings =
-          revenueStats.totalRevenue - revenueStats.totalCommission;
-      }
-    });
-
-    // Get recent bundles
-    const recentBundles = await Bundle.find({ provider: providerId })
-      .populate("creator", "firstName lastName profileImage")
-      .sort({ updatedAt: -1 })
-      .limit(5);
-
-    res.json({
-      success: true,
-      data: {
-        statusCounts,
-        revenueStats,
-        recentBundles,
-        provider: {
-          id: req.user._id,
-          name: `${req.user.firstName} ${req.user.lastName}`,
-          businessName: req.user.businessNameRegistered,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Get provider bundle stats error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to fetch bundle statistics",
       error: error.message,
     });
   }

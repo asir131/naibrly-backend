@@ -140,6 +140,36 @@ const serviceProviderSchema = new mongoose.Schema(
       max: 10,
       required: true,
     },
+    paymentSettings: {
+      preferredPaymentMethods: [String],
+      bankAccount: {
+        accountHolder: String,
+        accountNumber: String,
+        bankName: String,
+        routingNumber: String,
+      },
+      taxId: String,
+    },
+    totalEarnings: {
+      type: Number,
+      default: 0,
+    },
+    pendingEarnings: {
+      type: Number,
+      default: 0,
+    },
+    totalEarnings: {
+      type: Number,
+      default: 0,
+    },
+    pendingEarnings: {
+      type: Number,
+      default: 0,
+    },
+    stripeAccountId: {
+      type: String,
+      default: "",
+    },
     businessServiceDays: {
       start: {
         type: String,
