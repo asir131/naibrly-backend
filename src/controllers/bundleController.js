@@ -632,6 +632,7 @@ exports.updateBundleStatus = async (req, res) => {
 
     let statusNote = "";
     let changedBy = "provider";
+    let originalMaxParticipants = bundle.maxParticipants; // Store original capacity
 
     // Handle different status updates
     if (status === "accepted") {
@@ -646,10 +647,21 @@ exports.updateBundleStatus = async (req, res) => {
         });
       }
 
+      // ✅ UPDATE: Set maxParticipants to provider's maxBundleCapacity
+      const providerMaxCapacity = provider.maxBundleCapacity || 5;
+      bundle.maxParticipants = providerMaxCapacity;
+
+      console.log("🔄 Updating bundle capacity:", {
+        originalCapacity: originalMaxParticipants,
+        providerCapacity: providerMaxCapacity,
+        newCapacity: bundle.maxParticipants,
+      });
+
       // Set provider and update rates
       bundle.provider = providerId;
       statusNote =
-        message || `Bundle accepted by ${provider.businessNameRegistered}`;
+        message ||
+        `Bundle accepted by ${provider.businessNameRegistered}. Capacity set to ${providerMaxCapacity}.`;
 
       // Add to provider offers if not already there
       const existingOffer = bundle.providerOffers.find(
@@ -661,7 +673,7 @@ exports.updateBundleStatus = async (req, res) => {
           provider: providerId,
           message:
             message ||
-            `Provider ${provider.businessNameRegistered} accepted this bundle`,
+            `Provider ${provider.businessNameRegistered} accepted this bundle (Capacity: ${providerMaxCapacity})`,
           status: "accepted",
         });
       }
@@ -812,15 +824,14 @@ exports.updateBundleStatus = async (req, res) => {
       {
         path: "provider",
         select:
-          "businessNameRegistered businessLogo rating phone email servicesProvided",
+          "businessNameRegistered businessLogo rating phone email servicesProvided maxBundleCapacity",
       },
     ]);
 
     // Prepare response message
     let responseMessage = `Bundle ${status} successfully`;
     if (status === "accepted") {
-      responseMessage =
-        "Bundle accepted successfully. Pricing updated with your service rates.";
+      responseMessage = `Bundle accepted successfully. Capacity updated from ${originalMaxParticipants} to ${bundle.maxParticipants} spots. Pricing updated with your service rates.`;
     } else if (status === "declined") {
       responseMessage = "Bundle declined successfully";
     } else if (status === "in_progress") {
@@ -843,8 +854,20 @@ exports.updateBundleStatus = async (req, res) => {
         provider: {
           id: provider._id,
           businessName: provider.businessNameRegistered,
+          maxBundleCapacity: provider.maxBundleCapacity,
           services: provider.servicesProvided, // Show provider's services for reference
         },
+        capacityUpdate:
+          status === "accepted"
+            ? {
+                message: "Bundle capacity updated to provider's max capacity",
+                originalCapacity: originalMaxParticipants,
+                newCapacity: bundle.maxParticipants,
+                providerMaxCapacity: provider.maxBundleCapacity,
+                availableSpots:
+                  bundle.maxParticipants - bundle.currentParticipants,
+              }
+            : null,
         pricingUpdate:
           status === "accepted"
             ? {
@@ -991,43 +1014,57 @@ exports.updateBundleWithProviderRates = async (bundleId, providerId) => {
       throw new Error("Bundle or provider not found");
     }
 
-    console.log("🔄 Updating bundle with provider rates:", {
+    console.log("🔧 Updating bundle with provider's rates and capacity:", {
       bundleId,
       providerId,
-      providerServices: provider.servicesProvided,
-      bundleServices: bundle.services,
+      currentMaxParticipants: bundle.maxParticipants,
+      providerMaxCapacity: provider.maxBundleCapacity,
     });
 
     // Update each service with provider's specific hourly rate
     const updatedServices = bundle.services.map((service) => {
       const providerService = provider.servicesProvided.find(
-        (sp) => sp.name.toLowerCase() === service.name.toLowerCase()
+        (sp) => sp.name === service.name
       );
-
-      const newHourlyRate = providerService?.hourlyRate || service.hourlyRate;
-
-      console.log(`💰 Service: ${service.name}`, {
-        oldRate: service.hourlyRate,
-        newRate: newHourlyRate,
-        foundInProvider: !!providerService,
-      });
 
       return {
         name: service.name,
-        hourlyRate: newHourlyRate,
-        estimatedHours: service.estimatedHours || 2, // Keep existing estimated hours
+        hourlyRate: providerService?.hourlyRate || service.hourlyRate,
       };
     });
 
+    // ✅ UPDATE: Set maxParticipants to provider's maxBundleCapacity
     bundle.services = updatedServices;
+    bundle.maxParticipants = provider.maxBundleCapacity || 5;
+
+    // If current participants exceed new capacity, handle it
+    if (bundle.currentParticipants > bundle.maxParticipants) {
+      console.warn(
+        `⚠️ Bundle has ${bundle.currentParticipants} participants but provider capacity is ${bundle.maxParticipants}`
+      );
+      // You can choose to handle this by setting status to full or other logic
+      if (bundle.currentParticipants >= bundle.maxParticipants) {
+        bundle.status = "full";
+      }
+    }
+
     await bundle.save();
 
-    console.log("✅ Bundle updated with provider's hourly rates:", {
-      services: updatedServices,
-    });
+    console.log(
+      "✅ Bundle updated with provider's hourly rates and capacity:",
+      {
+        newMaxParticipants: bundle.maxParticipants,
+        providerMaxCapacity: provider.maxBundleCapacity,
+        servicesCount: bundle.services.length,
+      }
+    );
+
     return bundle;
   } catch (error) {
-    console.error("Error updating bundle with provider rates:", error);
+    console.error(
+      "Error updating bundle with provider rates and capacity:",
+      error
+    );
     throw error;
   }
 };
