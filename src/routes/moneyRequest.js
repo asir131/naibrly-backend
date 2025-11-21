@@ -14,6 +14,10 @@ const {
   raiseDispute,
   resolveDispute,
   getMoneyRequestStats,
+  handlePaymentSuccess,
+  handlePaymentCancel,
+  testPaymentWebhook,
+  checkPaymentStatus,
 } = require("../controllers/moneyRequestController");
 
 const { auth, authorize } = require("../middleware/auth");
@@ -48,6 +52,13 @@ router.post(
   authorize("customer"),
   completePayment
 );
+router.get(
+  "/payment/success",
+  auth,
+  authorize("customer"),
+  handlePaymentSuccess
+);
+router.get("/payment/cancel", auth, authorize("customer"), handlePaymentCancel);
 
 // Both provider and customer can get details and raise disputes
 router.get("/:moneyRequestId", auth, getMoneyRequest);
@@ -65,6 +76,21 @@ router.patch(
   auth,
   authorize("admin"),
   resolveDispute
+);
+
+router.get(
+  "/:moneyRequestId/status",
+  auth,
+  authorize("customer", "provider"),
+  checkPaymentStatus
+);
+
+// Test webhook (for development only)
+router.post(
+  "/:moneyRequestId/test-webhook",
+  auth,
+  authorize("admin"),
+  testPaymentWebhook
 );
 
 module.exports = router;

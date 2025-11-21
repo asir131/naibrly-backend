@@ -1,3 +1,4 @@
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const MoneyRequest = require("../models/MoneyRequest");
 const ServiceRequest = require("../models/ServiceRequest");
 const Bundle = require("../models/Bundle");
@@ -7,7 +8,6 @@ const {
   calculateServiceCommission,
   calculateBundleCommission,
 } = require("./commissionController");
-const stripeService = require("../utils/stripeService");
 
 // Create money request for completed service or bundle
 const createMoneyRequest = async (req, res) => {
@@ -432,32 +432,18 @@ const getMoneyRequest = async (req, res) => {
   }
 };
 
-// Process payment with Stripe
+// Process payment using Stripe Checkout
 const processPayment = async (req, res) => {
   try {
     const { moneyRequestId } = req.params;
-    const { cardDetails } = req.body;
     const customerId = req.user._id;
 
-    console.log("Processing payment for money request:", {
+    console.log("Creating Stripe Checkout session for money request:", {
       moneyRequestId,
       customerId,
     });
 
-    if (
-      !cardDetails ||
-      !cardDetails.name ||
-      !cardDetails.cardNumber ||
-      !cardDetails.expMonth ||
-      !cardDetails.expYear ||
-      !cardDetails.cvc
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "All card details are required",
-      });
-    }
-
+    // Find the money request
     const moneyRequest = await MoneyRequest.findOne({
       _id: moneyRequestId,
       customer: customerId,
@@ -479,40 +465,158 @@ const processPayment = async (req, res) => {
       });
     }
 
-    // For now, let's simulate a successful payment without Stripe
-    // We'll implement Stripe later once the basic routes work
+    // Create Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: `Payment for ${moneyRequest.description || "Service"}`,
+              description: `Payment request from ${moneyRequest.provider.businessNameRegistered}`,
+            },
+            unit_amount: Math.round(moneyRequest.totalAmount * 100), // Convert to cents
+          },
+          quantity: 1,
+        },
+      ],
+      mode: "payment",
+      success_url: `${
+        process.env.CLIENT_URL || "http://localhost:3000"
+      }/payment-success?session_id={CHECKOUT_SESSION_ID}&money_request_id=${moneyRequestId}`,
+      cancel_url: `${
+        process.env.CLIENT_URL || "http://localhost:3000"
+      }/payment-canceled?money_request_id=${moneyRequestId}`,
+      customer_email: customer.email,
+      client_reference_id: moneyRequestId.toString(), // Convert to string
+      metadata: {
+        moneyRequestId: moneyRequestId.toString(), // Convert to string
+        customerId: customerId.toString(), // Convert to string
+        providerId: moneyRequest.provider._id.toString(), // Convert to string
+      },
+      billing_address_collection: "required",
+    });
 
-    moneyRequest.status = "paid";
+    // Save session ID to money request for webhook handling
     moneyRequest.paymentDetails = {
-      paymentMethod: "card",
-      paidAt: new Date(),
-      transactionId: "simulated_" + Date.now(),
-      notes: "Payment processed successfully (simulated)",
+      checkoutSessionId: session.id,
+      sessionCreatedAt: new Date(),
+      status: "checkout_pending",
     };
-    moneyRequest._statusChangedBy = customerId;
-    moneyRequest._statusChangedByRole = "customer";
-
     await moneyRequest.save();
 
-    // Update provider's earnings
-    await ServiceProvider.findByIdAndUpdate(moneyRequest.provider._id, {
-      $inc: {
-        totalEarnings: moneyRequest.commission.providerAmount,
-      },
-    });
+    console.log("Stripe Checkout session created:", session.id);
 
     res.json({
       success: true,
-      message: "Payment processed successfully (simulated)",
+      message: "Stripe Checkout session created successfully",
       data: {
-        moneyRequest,
+        sessionId: session.id,
+        sessionUrl: session.url,
+        redirectUrl: session.url,
+        moneyRequest: {
+          id: moneyRequest._id,
+          amount: moneyRequest.totalAmount,
+          description: moneyRequest.description,
+        },
       },
     });
   } catch (error) {
-    console.error("Process payment error:", error);
+    console.error("Stripe Checkout error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to process payment",
+      message: "Failed to create payment session",
+      error: error.message,
+    });
+  }
+};
+
+// Handle successful payment redirect
+const handlePaymentSuccess = async (req, res) => {
+  try {
+    const { session_id, money_request_id } = req.query;
+    const customerId = req.user._id;
+
+    console.log("Payment success callback:", { session_id, money_request_id });
+
+    // Verify the session and payment
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+
+    if (session.payment_status === "paid") {
+      const moneyRequest = await MoneyRequest.findOne({
+        _id: money_request_id,
+        customer: customerId,
+      });
+
+      if (moneyRequest) {
+        res.json({
+          success: true,
+          message: "Payment completed successfully!",
+          data: {
+            moneyRequest: {
+              id: moneyRequest._id,
+              status: moneyRequest.status,
+              amount: moneyRequest.totalAmount,
+            },
+            session: {
+              id: session.id,
+              paymentStatus: session.payment_status,
+            },
+          },
+        });
+      } else {
+        res.status(404).json({
+          success: false,
+          message: "Money request not found",
+        });
+      }
+    } else {
+      res.status(400).json({
+        success: false,
+        message: "Payment not completed",
+      });
+    }
+  } catch (error) {
+    console.error("Payment success handler error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error verifying payment",
+      error: error.message,
+    });
+  }
+};
+
+// Handle canceled payment
+const handlePaymentCancel = async (req, res) => {
+  try {
+    const { money_request_id } = req.query;
+    const customerId = req.user._id;
+
+    console.log("Payment canceled for money request:", money_request_id);
+
+    // Update money request status
+    await MoneyRequest.findOneAndUpdate(
+      { _id: money_request_id, customer: customerId },
+      {
+        "paymentDetails.status": "checkout_canceled",
+        "paymentDetails.canceledAt": new Date(),
+      }
+    );
+
+    res.json({
+      success: true,
+      message: "Payment canceled",
+      data: {
+        moneyRequestId: money_request_id,
+        status: "canceled",
+      },
+    });
+  } catch (error) {
+    console.error("Payment cancel handler error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error handling payment cancellation",
       error: error.message,
     });
   }
@@ -553,6 +657,7 @@ const completePayment = async (req, res) => {
     });
   }
 };
+
 // Raise dispute
 const raiseDispute = async (req, res) => {
   try {
@@ -730,6 +835,78 @@ const getMoneyRequestStats = async (req, res) => {
   }
 };
 
+// Test payment endpoint
+const testPaymentWebhook = async (req, res) => {
+  try {
+    const { moneyRequestId } = req.params;
+
+    // Simulate webhook call
+    const mockSession = {
+      id: "test_session_" + Date.now(),
+      payment_status: "paid",
+      metadata: {
+        moneyRequestId: moneyRequestId,
+      },
+      amount_total: 15000,
+      customer: "test_customer_123",
+      payment_intent: "test_pi_" + Date.now(),
+    };
+
+    await handleCheckoutSessionCompleted(mockSession);
+
+    res.json({
+      success: true,
+      message: "Test webhook processed successfully",
+      moneyRequestId: moneyRequestId,
+    });
+  } catch (error) {
+    console.error("Test webhook error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Test webhook failed",
+      error: error.message,
+    });
+  }
+};
+// Add this to your moneyRequestController.js
+const checkPaymentStatus = async (req, res) => {
+  try {
+    const { moneyRequestId } = req.params;
+
+    const moneyRequest = await MoneyRequest.findById(moneyRequestId)
+      .populate("customer", "firstName lastName email")
+      .populate("provider", "businessNameRegistered email");
+
+    if (!moneyRequest) {
+      return res.status(404).json({
+        success: false,
+        message: "Money request not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        moneyRequest: {
+          id: moneyRequest._id,
+          status: moneyRequest.status,
+          amount: moneyRequest.totalAmount,
+          paymentDetails: moneyRequest.paymentDetails,
+          customer: moneyRequest.customer,
+          provider: moneyRequest.provider,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Check payment status error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to check payment status",
+      error: error.message,
+    });
+  }
+};
+
 // Export all functions
 module.exports = {
   createMoneyRequest,
@@ -743,4 +920,8 @@ module.exports = {
   raiseDispute,
   resolveDispute,
   getMoneyRequestStats,
+  handlePaymentSuccess,
+  handlePaymentCancel,
+  testPaymentWebhook,
+  checkPaymentStatus,
 };
