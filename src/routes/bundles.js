@@ -39,6 +39,12 @@ router.patch(
   authorize("provider"),
   bundleController.updateBundleStatus
 );
+router.get(
+  "/search",
+  auth,
+  authorize("customer"),
+  bundleController.searchBundlesByNameAndZip
+);
 
 // Public routes
 router.get("/by-zipcode", bundleController.getBundlesByZipCode);

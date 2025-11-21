@@ -1004,6 +1004,217 @@ exports.getNearbyBundlesForCustomer = async (req, res) => {
   }
 };
 
+// Search bundles by name and ZIP code for customers
+exports.searchBundlesByNameAndZip = async (req, res) => {
+  try {
+    const { searchQuery, zipCode, category, page = 1, limit = 10 } = req.query;
+    const customerId = req.user._id;
+
+    console.log("🔍 Searching bundles for customer:", {
+      customerId,
+      searchQuery,
+      zipCode,
+      category,
+    });
+
+    // Get customer details
+    const customer = await Customer.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    // Use provided ZIP code or customer's default ZIP code
+    const searchZipCode = zipCode || customer.address.zipCode;
+    console.log("🔍 Using ZIP code:", searchZipCode);
+
+    if (!searchZipCode) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "ZIP code is required. Please provide zipCode or update your profile address.",
+      });
+    }
+
+    // Build search filter
+    const filter = {
+      zipCode: searchZipCode,
+      status: { $in: ["pending", "accepted"] },
+      expiresAt: { $gt: new Date() },
+      $expr: { $lt: ["$currentParticipants", "$maxParticipants"] },
+    };
+
+    // Add search query filter (search in title and description)
+    if (searchQuery && searchQuery.trim() !== "") {
+      const searchRegex = new RegExp(searchQuery.trim(), "i");
+      filter.$or = [
+        { title: { $regex: searchRegex } },
+        { description: { $regex: searchRegex } },
+        { category: { $regex: searchRegex } },
+        { categoryTypeName: { $regex: searchRegex } },
+        { "services.name": { $regex: searchRegex } },
+      ];
+    }
+
+    // Optional category filter
+    if (category && category !== "all") {
+      filter.category = category;
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [bundles, total] = await Promise.all([
+      Bundle.find(filter)
+        .populate("creator", "firstName lastName profileImage address")
+        .populate(
+          "participants.customer",
+          "firstName lastName profileImage address"
+        )
+        .populate("provider", "businessNameRegistered businessLogo rating")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Bundle.countDocuments(filter),
+    ]);
+
+    console.log(`🔍 Found ${bundles.length} bundles matching search criteria`);
+
+    // Add pricing and user-specific information to each bundle
+    const bundlesWithDetails = bundles.map((bundle) => {
+      const pricing = bundle.calculateCustomerPrice();
+      const isCreator = bundle.creator._id.toString() === customerId.toString();
+      const isParticipant = bundle.participants.some(
+        (p) =>
+          p.customer._id.toString() === customerId.toString() &&
+          p.status === "active"
+      );
+
+      // Calculate relevance score for search results
+      const relevanceScore = calculateBundleRelevance(bundle, searchQuery);
+
+      return {
+        ...bundle.toObject(),
+        pricing: pricing,
+        availableSpots: bundle.maxParticipants - bundle.currentParticipants,
+        userRole: isCreator
+          ? "creator"
+          : isParticipant
+          ? "participant"
+          : "none",
+        canJoin:
+          !isCreator &&
+          !isParticipant &&
+          bundle.currentParticipants < bundle.maxParticipants,
+        relevanceScore: relevanceScore,
+        searchMatch: {
+          titleMatch: searchQuery
+            ? bundle.title.toLowerCase().includes(searchQuery.toLowerCase())
+            : false,
+          descriptionMatch: searchQuery
+            ? bundle.description
+                .toLowerCase()
+                .includes(searchQuery.toLowerCase())
+            : false,
+          serviceMatch: searchQuery
+            ? bundle.services.some((service) =>
+                service.name.toLowerCase().includes(searchQuery.toLowerCase())
+              )
+            : false,
+        },
+      };
+    });
+
+    // Sort by relevance if search query is provided
+    if (searchQuery && searchQuery.trim() !== "") {
+      bundlesWithDetails.sort((a, b) => b.relevanceScore - a.relevanceScore);
+    }
+
+    res.json({
+      success: true,
+      message: `Found ${bundles.length} bundles matching your search`,
+      data: {
+        bundles: bundlesWithDetails,
+        searchSummary: {
+          query: searchQuery || "all bundles",
+          zipCode: searchZipCode,
+          category: category || "all",
+          totalResults: total,
+          hasSearchQuery: !!searchQuery,
+        },
+        customerLocation: {
+          zipCode: customer.address.zipCode,
+          address: customer.address,
+          searchUsedDefaultZip: !zipCode, // Indicates if customer's default ZIP was used
+        },
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+          hasMore: total > skip + parseInt(limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Search bundles by name and ZIP error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search bundles",
+      error: error.message,
+    });
+  }
+};
+
+// Helper function to calculate bundle relevance for search
+const calculateBundleRelevance = (bundle, searchQuery) => {
+  if (!searchQuery) return 0;
+
+  const query = searchQuery.toLowerCase();
+  let score = 0;
+
+  // Title matches are most important
+  if (bundle.title.toLowerCase().includes(query)) {
+    score += 50;
+  }
+
+  // Category matches
+  if (bundle.category.toLowerCase().includes(query)) {
+    score += 30;
+  }
+
+  // Category type matches
+  if (bundle.categoryTypeName.toLowerCase().includes(query)) {
+    score += 25;
+  }
+
+  // Service matches
+  const serviceMatch = bundle.services.some((service) =>
+    service.name.toLowerCase().includes(query)
+  );
+  if (serviceMatch) {
+    score += 20;
+  }
+
+  // Description matches (less important)
+  if (bundle.description.toLowerCase().includes(query)) {
+    score += 10;
+  }
+
+  // Boost relevance for newer bundles
+  const daysOld = (new Date() - bundle.createdAt) / (1000 * 60 * 60 * 24);
+  if (daysOld < 1) score += 15; // Less than 1 day old
+  else if (daysOld < 3) score += 10; // Less than 3 days old
+  else if (daysOld < 7) score += 5; // Less than 1 week old
+
+  // Boost for bundles with more available spots
+  const availabilityRatio =
+    (bundle.maxParticipants - bundle.currentParticipants) /
+    bundle.maxParticipants;
+  score += Math.round(availabilityRatio * 10);
+
+  return Math.min(score, 100);
+};
 // Update bundle with provider's hourly rates when they accept
 exports.updateBundleWithProviderRates = async (bundleId, providerId) => {
   try {
