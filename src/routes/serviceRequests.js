@@ -11,6 +11,7 @@ const {
   testProviderServices,
   getProviderRequestsByStatus,
   getProviderDashboardStats,
+  getProvidersByServiceAndZip,
 } = require("../controllers/serviceRequestController");
 const { auth } = require("../middleware/auth");
 
@@ -34,8 +35,13 @@ router.patch("/:requestId/status", auth, updateRequestStatus);
 
 // Public routes (for browsing providers)
 router.get("/providers", getProvidersByService);
+router.get("/search-providers", getProvidersByServiceAndZip);
 
 // Customer: Nearby services by ZIP
-router.get("/customer/nearby-services", auth, require("../controllers/serviceRequestController").getNearbyServicesByZip);
+router.get(
+  "/customer/nearby-services",
+  auth,
+  require("../controllers/serviceRequestController").getNearbyServicesByZip
+);
 
 module.exports = router;

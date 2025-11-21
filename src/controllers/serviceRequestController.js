@@ -895,8 +895,9 @@ exports.getProvidersByService = async (req, res) => {
       });
     }
 
+    // Fixed filter - query the nested name field in servicesProvided array
     const filter = {
-      servicesProvided: serviceType,
+      "servicesProvided.name": serviceType,
       isApproved: true,
       isActive: true,
     };
@@ -909,10 +910,23 @@ exports.getProvidersByService = async (req, res) => {
 
     const total = await ServiceProvider.countDocuments(filter);
 
+    // Format the response to include only the matching service
+    const formattedProviders = providers.map((provider) => {
+      const matchingService = provider.servicesProvided.find(
+        (service) => service.name === serviceType
+      );
+
+      return {
+        ...provider.toObject(),
+        // Include only the matching service for clarity
+        matchingService: matchingService || null,
+      };
+    });
+
     res.json({
       success: true,
       data: {
-        providers,
+        providers: formattedProviders,
         pagination: {
           current: parseInt(page),
           total,
@@ -928,6 +942,252 @@ exports.getProvidersByService = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+// Advanced provider search with service type and ZIP code matching
+exports.getProvidersByServiceAndZip = async (req, res) => {
+  try {
+    const {
+      serviceType,
+      zipCode,
+      minRating = 0,
+      maxHourlyRate,
+      sortBy = "rating",
+      page = 1,
+      limit = 10,
+    } = req.query;
+
+    const skip = (page - 1) * limit;
+
+    // Validate required fields
+    if (!serviceType || !zipCode) {
+      return res.status(400).json({
+        success: false,
+        message: "Service type and ZIP code are required",
+        requiredFields: {
+          serviceType: !serviceType,
+          zipCode: !zipCode,
+        },
+      });
+    }
+
+    console.log("🔍 Advanced provider search:", {
+      serviceType,
+      zipCode,
+      minRating,
+      maxHourlyRate,
+      sortBy,
+    });
+
+    // Build comprehensive filter
+    const filter = {
+      "servicesProvided.name": serviceType,
+      "serviceAreas.zipCode": zipCode,
+      "serviceAreas.isActive": true,
+      isApproved: true,
+      isActive: true,
+    };
+
+    // Add optional filters
+    if (minRating > 0) {
+      filter.rating = { $gte: parseFloat(minRating) };
+    }
+
+    if (maxHourlyRate) {
+      filter["servicesProvided.hourlyRate"] = {
+        $lte: parseFloat(maxHourlyRate),
+      };
+    }
+
+    // Build sort object
+    let sortObject = {};
+    switch (sortBy) {
+      case "rating":
+        sortObject = { rating: -1, totalReviews: -1 };
+        break;
+      case "experience":
+        sortObject = { experience: -1 };
+        break;
+      case "price_low":
+        sortObject = { "servicesProvided.hourlyRate": 1 };
+        break;
+      case "price_high":
+        sortObject = { "servicesProvided.hourlyRate": -1 };
+        break;
+      case "jobs_completed":
+        sortObject = { totalJobsCompleted: -1 };
+        break;
+      default:
+        sortObject = { rating: -1 };
+    }
+
+    const [providers, total] = await Promise.all([
+      ServiceProvider.find(filter)
+        .select("-password -paymentSettings -documents -resetPasswordToken")
+        .sort(sortObject)
+        .skip(skip)
+        .limit(parseInt(limit)),
+      ServiceProvider.countDocuments(filter),
+    ]);
+
+    // Format response with detailed matching information
+    const formattedProviders = providers.map((provider) => {
+      const matchingService = provider.servicesProvided.find(
+        (service) => service.name === serviceType
+      );
+
+      const serviceArea = provider.serviceAreas.find(
+        (area) => area.zipCode === zipCode && area.isActive
+      );
+
+      // Calculate match score based on multiple factors
+      const matchScore = calculateProviderMatchScore(
+        provider,
+        serviceType,
+        zipCode
+      );
+
+      return {
+        provider: {
+          id: provider._id,
+          businessName: provider.businessNameRegistered,
+          businessLogo: provider.businessLogo,
+          profileImage: provider.profileImage,
+          rating: provider.rating,
+          totalReviews: provider.totalReviews,
+          totalJobsCompleted: provider.totalJobsCompleted,
+          experience: provider.experience,
+          description: provider.description,
+          phone: provider.phone,
+          email: provider.email,
+          businessAddress: provider.businessAddress,
+          serviceAreas: provider.serviceAreas.filter((area) => area.isActive),
+        },
+        service: {
+          name: matchingService?.name || serviceType,
+          hourlyRate: matchingService?.hourlyRate || 0,
+          providerServiceId: matchingService?._id,
+        },
+        serviceArea: serviceArea || null,
+        matchDetails: {
+          zipCodeMatch: true,
+          serviceMatch: !!matchingService,
+          matchScore: matchScore,
+          availability: provider.isAvailable !== false,
+          responseTime: "Within 24 hours", // You can calculate this based on historical data
+        },
+        bookingInfo: {
+          canBookDirectly: true,
+          requiresApproval: false,
+          estimatedResponseTime: "1-2 hours",
+        },
+      };
+    });
+
+    console.log(`✅ Found ${formattedProviders.length} matching providers`);
+
+    res.json({
+      success: true,
+      message: `Found ${formattedProviders.length} providers for "${serviceType}" in ${zipCode}`,
+      data: {
+        searchCriteria: {
+          serviceType,
+          zipCode,
+          minRating,
+          maxHourlyRate,
+          sortBy,
+        },
+        providers: formattedProviders,
+        filtersApplied: {
+          serviceType,
+          zipCode,
+          minRating: minRating || "any",
+          maxHourlyRate: maxHourlyRate || "any",
+          sortBy,
+        },
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / limit),
+          hasMore: total > skip + parseInt(limit),
+        },
+        summary: {
+          totalMatches: total,
+          availableNow: formattedProviders.length,
+          averageRating:
+            providers.length > 0
+              ? (
+                  providers.reduce((sum, p) => sum + (p.rating || 0), 0) /
+                  providers.length
+                ).toFixed(1)
+              : 0,
+          priceRange:
+            providers.length > 0
+              ? {
+                  min: Math.min(
+                    ...providers.flatMap((p) =>
+                      p.servicesProvided
+                        .filter((s) => s.name === serviceType)
+                        .map((s) => s.hourlyRate)
+                    )
+                  ),
+                  max: Math.max(
+                    ...providers.flatMap((p) =>
+                      p.servicesProvided
+                        .filter((s) => s.name === serviceType)
+                        .map((s) => s.hourlyRate)
+                    )
+                  ),
+                  average: (
+                    providers
+                      .flatMap((p) =>
+                        p.servicesProvided
+                          .filter((s) => s.name === serviceType)
+                          .map((s) => s.hourlyRate)
+                      )
+                      .reduce((sum, rate) => sum + rate, 0) / providers.length
+                  ).toFixed(2),
+                }
+              : null,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Search providers error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search providers",
+      error: error.message,
+    });
+  }
+};
+
+// Helper function to calculate provider match score
+const calculateProviderMatchScore = (provider, serviceType, zipCode) => {
+  let score = 0;
+
+  // Base score for having the service
+  const hasService = provider.servicesProvided.some(
+    (s) => s.name === serviceType
+  );
+  if (hasService) score += 40;
+
+  // Score for rating
+  if (provider.rating >= 4.5) score += 30;
+  else if (provider.rating >= 4.0) score += 20;
+  else if (provider.rating >= 3.0) score += 10;
+
+  // Score for experience
+  if (provider.experience >= 5) score += 15;
+  else if (provider.experience >= 2) score += 10;
+  else if (provider.experience >= 1) score += 5;
+
+  // Score for completed jobs
+  if (provider.totalJobsCompleted >= 50) score += 15;
+  else if (provider.totalJobsCompleted >= 20) score += 10;
+  else if (provider.totalJobsCompleted >= 5) score += 5;
+
+  return Math.min(score, 100);
 };
 
 // Nearby services by customer's ZIP code - MATCHING SERVICE AREAS
