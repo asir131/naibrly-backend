@@ -432,7 +432,7 @@ const getMoneyRequest = async (req, res) => {
   }
 };
 
-// Process payment using Stripe Checkout
+// In your moneyRequestController.js - processPayment function
 const processPayment = async (req, res) => {
   try {
     const { moneyRequestId } = req.params;
@@ -443,7 +443,6 @@ const processPayment = async (req, res) => {
       customerId,
     });
 
-    // Find the money request
     const moneyRequest = await MoneyRequest.findOne({
       _id: moneyRequestId,
       customer: customerId,
@@ -457,15 +456,7 @@ const processPayment = async (req, res) => {
       });
     }
 
-    const customer = await Customer.findById(customerId);
-    if (!customer) {
-      return res.status(404).json({
-        success: false,
-        message: "Customer not found",
-      });
-    }
-
-    // Create Stripe Checkout Session
+    // Create Stripe Checkout Session with backend success URL
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: [
@@ -476,29 +467,28 @@ const processPayment = async (req, res) => {
               name: `Payment for ${moneyRequest.description || "Service"}`,
               description: `Payment request from ${moneyRequest.provider.businessNameRegistered}`,
             },
-            unit_amount: Math.round(moneyRequest.totalAmount * 100), // Convert to cents
+            unit_amount: Math.round(moneyRequest.totalAmount * 100),
           },
           quantity: 1,
         },
       ],
       mode: "payment",
+      // Redirect to backend endpoint instead of frontend
       success_url: `${
-        process.env.CLIENT_URL || "http://localhost:3000"
-      }/payment-success?session_id={CHECKOUT_SESSION_ID}&money_request_id=${moneyRequestId}`,
+        process.env.CLIENT_URL || "http://localhost:5000"
+      }/api/money-requests/${moneyRequestId}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${
-        process.env.CLIENT_URL || "http://localhost:3000"
-      }/payment-canceled?money_request_id=${moneyRequestId}`,
-      customer_email: customer.email,
-      client_reference_id: moneyRequestId.toString(), // Convert to string
+        process.env.CLIENT_URL || "http://localhost:5000"
+      }/api/money-requests/${moneyRequestId}/payment-canceled`,
+      customer_email: moneyRequest.customer.email,
       metadata: {
-        moneyRequestId: moneyRequestId.toString(), // Convert to string
-        customerId: customerId.toString(), // Convert to string
-        providerId: moneyRequest.provider._id.toString(), // Convert to string
+        moneyRequestId: moneyRequestId.toString(),
+        customerId: customerId.toString(),
+        providerId: moneyRequest.provider._id.toString(),
       },
-      billing_address_collection: "required",
     });
 
-    // Save session ID to money request for webhook handling
+    // Save session ID to money request
     moneyRequest.paymentDetails = {
       checkoutSessionId: session.id,
       sessionCreatedAt: new Date(),
@@ -514,12 +504,13 @@ const processPayment = async (req, res) => {
       data: {
         sessionId: session.id,
         sessionUrl: session.url,
-        redirectUrl: session.url,
+        checkoutUrl: session.url, // This is what the user should click
         moneyRequest: {
           id: moneyRequest._id,
           amount: moneyRequest.totalAmount,
           description: moneyRequest.description,
         },
+        instructions: "Click the checkoutUrl to complete payment",
       },
     });
   } catch (error) {

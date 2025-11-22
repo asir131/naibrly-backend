@@ -27,8 +27,12 @@ const server = http.createServer(app);
 // Initialize Socket.io
 initSocket(server);
 
-// Middleware
+// ========== MIDDLEWARE SETUP ========== //
+
+// Security middleware
 app.use(helmet());
+
+// CORS middleware
 app.use(
   cors({
     origin: [
@@ -38,22 +42,80 @@ app.use(
     credentials: true,
   })
 );
+
+// Logging middleware
 app.use(morgan("combined"));
+
+// ========== CRITICAL: WEBHOOK ROUTES FIRST (raw body) ========== //
+app.use("/api/webhooks", require("./routes/webhooks"));
+
+// ========== BODY PARSERS (after webhooks) ========== //
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// Serve uploaded files
+// ========== STATIC FILES ========== //
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Initialize admin user on server start
+// ========== INITIALIZE DATA ========== //
 initializeAdmin();
 initializeDefaultData();
 initializeBundleSettings();
 initializeCommissionSettings();
 
+// ========== API ROUTES ========== //
+
+// Commission routes
 app.use("/api/commission", require("./routes/commission"));
 
+// Money requests routes
 app.use("/api/money-requests", require("./routes/moneyRequest"));
+
+// Auth routes
+app.use("/api/auth", require("./routes/auth"));
+
+// Admin routes
+app.use("/api/admin", require("./routes/admin"));
+
+// User routes
+app.use("/api/users", require("./routes/users"));
+
+// Zip code routes
+app.use("/api/zip", require("./routes/zip"));
+
+// Service request routes
+app.use("/api/service-requests", require("./routes/serviceRequests"));
+
+// Password reset routes
+app.use("/api/auth/password-reset", require("./routes/passwordReset"));
+
+// Verification routes
+app.use("/api/verify-information", require("./routes/verification"));
+
+// Upload routes
+app.use("/api/upload", require("./routes/upload"));
+
+// Category routes
+app.use("/api/categories", require("./routes/categories"));
+
+// Bundle routes
+app.use("/api/bundles", require("./routes/bundles"));
+
+// Bundle settings routes
+app.use("/api/bundle-settings", require("./routes/bundleSettings"));
+
+// Provider routes
+app.use("/api/providers", require("./routes/providers"));
+
+// Quick chat routes
+app.use("/api/quick-chats", require("./routes/quickChats"));
+
+// Conversation routes
+app.use("/api/conversations", require("./routes/conversation"));
+
+// Search routes
+app.use("/api/search", require("./routes/search"));
+
+// ========== DEBUG & TEST ROUTES ========== //
 
 // Debug route for testing uploads
 app.post(
@@ -90,42 +152,28 @@ app.get("/", (req, res) => {
       bundleSettings: "/api/bundle-settings",
       providers: "/api/providers",
       quickChats: "/api/quick-chats",
+      webhooks: "/api/webhooks",
+      moneyRequests: "/api/money-requests",
+      commission: "/api/commission",
+      conversations: "/api/conversations",
+      search: "/api/search",
     },
     health: "/health",
     test: "/api/test",
   });
 });
 
-// Routes
-app.use("/api/auth", require("./routes/auth"));
-app.use("/api/admin", require("./routes/admin"));
-app.use("/api/users", require("./routes/users"));
-app.use("/api/zip", require("./routes/zip"));
-app.use("/api/service-requests", require("./routes/serviceRequests"));
-app.use("/api/auth/password-reset", require("./routes/passwordReset"));
-app.use("/api/verify-information", require("./routes/verification"));
-app.use("/api/upload", require("./routes/upload"));
-app.use("/api/categories", require("./routes/categories"));
-app.use("/api/bundles", require("./routes/bundles"));
-app.use("/api/bundle-settings", require("./routes/bundleSettings"));
-app.use("/api/providers", require("./routes/providers"));
-app.use("/api/quick-chats", require("./routes/quickChats"));
-
-app.use("/api/conversations", require("./routes/conversation"));
-
-app.use("/api/search", require("./routes/search"));
-
-app.use("/api/webhooks", require("./routes/webhooks"));
-
-// Test routes
+// Health check route
 app.get("/health", (_req, res) => {
   res.json({
     status: "OK",
     timestamp: new Date().toISOString(),
     port: process.env.PORT || 5000,
+    environment: process.env.NODE_ENV || "development",
   });
 });
 
+// Test routes
 app.get("/api/test", (req, res) => {
   res.json({
     success: true,
@@ -149,23 +197,7 @@ app.post("/api/debug/test-post", (req, res) => {
   });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("❌ An error occurred:", {
-    message: err.message,
-    stack: err.stack,
-    method: req.method,
-    url: req.originalUrl,
-    headers: req.headers,
-    body: req.body,
-  });
-  res.status(500).json({
-    success: false,
-    message: "Something went wrong!",
-    error: process.env.NODE_ENV === "production" ? {} : err.message,
-  });
-});
-
+// Email test routes
 app.get("/api/test-email", async (req, res) => {
   const result = await testEmailConfig();
   res.json(result);
@@ -177,13 +209,13 @@ app.get("/api/email-status", (req, res) => {
   res.json(status);
 });
 
-// Handle 404
+// ========== ERROR HANDLING ========== //
+
+// 404 handler
 app.use((req, res) => {
   console.log("🤔 Route not found:", {
     method: req.method,
     url: req.originalUrl,
-    headers: req.headers,
-    body: req.body,
   });
   res.status(404).json({
     success: false,
@@ -193,8 +225,22 @@ app.use((req, res) => {
   });
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error("❌ An error occurred:", {
+    message: err.message,
+    stack: err.stack,
+    method: req.method,
+    url: req.originalUrl,
+  });
+  res.status(500).json({
+    success: false,
+    message: "Something went wrong!",
+    error: process.env.NODE_ENV === "production" ? {} : err.message,
+  });
+});
+
+// ========== SERVER START ========== //
 
 const PORT = process.env.PORT || 5000;
 
@@ -204,4 +250,5 @@ server.listen(PORT, () => {
   console.log(`👤 Admin username: ${process.env.ADMIN_USERNAME}`);
   console.log(`🔗 API Root: http://localhost:${PORT}/`);
   console.log(`💬 Socket.io running on port ${PORT}`);
+  console.log(`🔔 Webhooks: http://localhost:${PORT}/api/webhooks/stripe`);
 });
