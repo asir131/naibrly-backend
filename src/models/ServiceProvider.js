@@ -81,6 +81,10 @@ const serviceProviderSchema = new mongoose.Schema(
         default: "",
       },
     },
+    hasPayoutSetup: {
+      type: Boolean,
+      default: false,
+    },
     // NEW: Multiple service areas
     serviceAreas: [
       {

@@ -45,6 +45,7 @@ router.get(
   authorize("customer"),
   bundleController.searchBundlesByNameAndZip
 );
+router.get("/all", bundleController.getAllBundles);
 
 // Public routes
 router.get("/by-zipcode", bundleController.getBundlesByZipCode);

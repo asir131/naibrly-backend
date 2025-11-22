@@ -6,6 +6,7 @@ const morgan = require("morgan");
 const path = require("path");
 const dotenv = require("dotenv");
 const http = require("http");
+const { initializeBanks } = require("./controllers/bankController");
 const connectDB = require("./config/database");
 const { initializeAdmin } = require("./controllers/adminController");
 const { initializeDefaultData } = require("./controllers/categoryController");
@@ -55,12 +56,14 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 // ========== STATIC FILES ========== //
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/api/payout", require("./routes/payout"));
 
 // ========== INITIALIZE DATA ========== //
 initializeAdmin();
 initializeDefaultData();
 initializeBundleSettings();
 initializeCommissionSettings();
+initializeBanks();
 
 // ========== API ROUTES ========== //
 

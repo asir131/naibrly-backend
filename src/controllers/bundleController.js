@@ -1441,6 +1441,264 @@ exports.getUserBundles = async (req, res) => {
   }
 };
 
+// Get all bundles with advanced filtering (for any user)
+exports.getAllBundles = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 10,
+      status,
+      category,
+      zipCode,
+      serviceType,
+      minPrice,
+      maxPrice,
+      sortBy = "createdAt",
+      sortOrder = "desc",
+      search,
+      providerId,
+      customerId,
+    } = req.query;
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Build filter object
+    const filter = {};
+
+    // Status filter
+    if (status) {
+      if (status === "active") {
+        filter.status = { $in: ["pending", "accepted", "in_progress"] };
+        filter.expiresAt = { $gt: new Date() };
+      } else if (status === "available") {
+        filter.status = { $in: ["pending", "accepted"] };
+        filter.expiresAt = { $gt: new Date() };
+        filter.$expr = { $lt: ["$currentParticipants", "$maxParticipants"] };
+      } else {
+        filter.status = status;
+      }
+    } else {
+      // Default: show active bundles only
+      filter.status = { $in: ["pending", "accepted", "in_progress"] };
+      filter.expiresAt = { $gt: new Date() };
+    }
+
+    // Category filter
+    if (category) {
+      filter.category = category;
+    }
+
+    // ZIP code filter
+    if (zipCode) {
+      filter.zipCode = zipCode;
+    }
+
+    // Service type filter
+    if (serviceType) {
+      filter["services.name"] = { $regex: serviceType, $options: "i" };
+    }
+
+    // Price range filter
+    if (minPrice || maxPrice) {
+      filter.finalPrice = {};
+      if (minPrice) filter.finalPrice.$gte = parseFloat(minPrice);
+      if (maxPrice) filter.finalPrice.$lte = parseFloat(maxPrice);
+    }
+
+    // Search filter (title, description, category)
+    if (search && search.trim() !== "") {
+      const searchRegex = new RegExp(search.trim(), "i");
+      filter.$or = [
+        { title: { $regex: searchRegex } },
+        { description: { $regex: searchRegex } },
+        { category: { $regex: searchRegex } },
+        { categoryTypeName: { $regex: searchRegex } },
+        { "services.name": { $regex: searchRegex } },
+      ];
+    }
+
+    // Provider filter
+    if (providerId) {
+      filter.provider = providerId;
+    }
+
+    // Customer filter (created by specific customer)
+    if (customerId) {
+      filter.creator = customerId;
+    }
+
+    console.log("🔍 Bundle filter:", JSON.stringify(filter, null, 2));
+
+    // Build sort object
+    const sortOptions = {};
+    switch (sortBy) {
+      case "price":
+        sortOptions.finalPrice = sortOrder === "asc" ? 1 : -1;
+        break;
+      case "participants":
+        sortOptions.currentParticipants = sortOrder === "asc" ? 1 : -1;
+        break;
+      case "expiry":
+        sortOptions.expiresAt = sortOrder === "asc" ? 1 : -1;
+        break;
+      case "title":
+        sortOptions.title = sortOrder === "asc" ? 1 : -1;
+        break;
+      default:
+        sortOptions.createdAt = sortOrder === "asc" ? 1 : -1;
+    }
+
+    // Execute query with population
+    const [bundles, total] = await Promise.all([
+      Bundle.find(filter)
+        .populate(
+          "creator",
+          "firstName lastName email phone profileImage address"
+        )
+        .populate(
+          "participants.customer",
+          "firstName lastName profileImage address"
+        )
+        .populate(
+          "provider",
+          "businessNameRegistered businessLogo rating phone email"
+        )
+        .populate(
+          "providerOffers.provider",
+          "businessNameRegistered businessLogo rating"
+        )
+        .sort(sortOptions)
+        .skip(skip)
+        .limit(parseInt(limit)),
+      Bundle.countDocuments(filter),
+    ]);
+
+    // Enhance bundles with additional information
+    const bundlesWithDetails = bundles.map((bundle) => {
+      const pricing = bundle.calculateCustomerPrice();
+      const availableSpots =
+        bundle.maxParticipants - bundle.currentParticipants;
+
+      // Calculate time remaining
+      const timeRemaining = bundle.expiresAt - new Date();
+      const hoursRemaining = Math.max(
+        0,
+        Math.floor(timeRemaining / (1000 * 60 * 60))
+      );
+
+      // Determine bundle status for display
+      let displayStatus = bundle.status;
+      if (bundle.status === "pending" && availableSpots === 0) {
+        displayStatus = "full";
+      } else if (bundle.status === "pending" && hoursRemaining < 24) {
+        displayStatus = "urgent";
+      }
+
+      return {
+        ...bundle.toObject(),
+        pricing: pricing,
+        availableSpots: availableSpots,
+        displayStatus: displayStatus,
+        hoursRemaining: hoursRemaining,
+        isExpired: new Date() > bundle.expiresAt,
+        canJoin:
+          availableSpots > 0 &&
+          bundle.status === "pending" &&
+          new Date() <= bundle.expiresAt,
+        servicesCount: bundle.services.length,
+        totalEstimatedHours: bundle.services.reduce(
+          (sum, service) => sum + (service.estimatedHours || 1),
+          0
+        ),
+      };
+    });
+
+    // Get aggregation data for statistics
+    const stats = await Bundle.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          totalBundles: { $sum: 1 },
+          avgParticipants: { $avg: "$currentParticipants" },
+          avgPrice: { $avg: "$finalPrice" },
+          minPrice: { $min: "$finalPrice" },
+          maxPrice: { $max: "$finalPrice" },
+        },
+      },
+    ]);
+
+    const categoryStats = await Bundle.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$category",
+          count: { $sum: 1 },
+          avgPrice: { $avg: "$finalPrice" },
+        },
+      },
+      { $sort: { count: -1 } },
+    ]);
+
+    res.json({
+      success: true,
+      message: `Found ${bundles.length} bundles`,
+      data: {
+        bundles: bundlesWithDetails,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+          hasMore: total > skip + parseInt(limit),
+        },
+        filters: {
+          status: status || "active",
+          category: category || "all",
+          zipCode: zipCode || "all",
+          serviceType: serviceType || "all",
+          priceRange: {
+            min: minPrice || 0,
+            max: maxPrice || "any",
+          },
+          search: search || "",
+          sortBy,
+          sortOrder,
+        },
+        statistics: stats[0]
+          ? {
+              totalBundles: stats[0].totalBundles,
+              avgParticipants: Math.round(stats[0].avgParticipants * 10) / 10,
+              avgPrice: Math.round(stats[0].avgPrice * 100) / 100,
+              priceRange: {
+                min: Math.round(stats[0].minPrice * 100) / 100,
+                max: Math.round(stats[0].maxPrice * 100) / 100,
+              },
+            }
+          : null,
+        categories: categoryStats,
+        summary: {
+          activeBundles: bundlesWithDetails.filter(
+            (b) =>
+              b.status === "pending" && !b.isExpired && b.availableSpots > 0
+          ).length,
+          expiringSoon: bundlesWithDetails.filter(
+            (b) => b.hoursRemaining < 24 && b.status === "pending"
+          ).length,
+          fullBundles: bundlesWithDetails.filter((b) => b.availableSpots === 0)
+            .length,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get all bundles error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch bundles",
+      error: error.message,
+    });
+  }
+};
+
 // Provider accepts bundle directly
 exports.providerAcceptBundle = async (req, res) => {
   try {

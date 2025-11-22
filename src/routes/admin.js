@@ -9,11 +9,17 @@ const {
   getAdminProfile,
 } = require("../controllers/adminController");
 const { protect, adminAuth } = require("../middleware/adminAuth");
+const { verifyPayoutInformation } = require("../controllers/payoutController");
 
 const router = express.Router();
 
 // Admin login (public route)
 router.post("/login", adminLogin);
+router.patch(
+  "/payout/:payoutInfoId/verify",
+  adminAuth,
+  verifyPayoutInformation
+);
 
 // Protected admin routes
 router.get("/dashboard/stats", adminAuth, getDashboardStats);
