@@ -27,6 +27,28 @@ const verificationSchema = new mongoose.Schema(
         required: true,
       },
     },
+    // 🆕 NEW: ID Card Front Image
+    idCardFront: {
+      url: {
+        type: String,
+        required: [true, "ID Card Front image is required"],
+      },
+      publicId: {
+        type: String,
+        required: true,
+      },
+    },
+    // 🆕 NEW: ID Card Back Image
+    idCardBack: {
+      url: {
+        type: String,
+        required: [true, "ID Card Back image is required"],
+      },
+      publicId: {
+        type: String,
+        required: true,
+      },
+    },
     firstName: {
       type: String,
       required: [true, "First name is required"],

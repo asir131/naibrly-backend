@@ -511,7 +511,6 @@ exports.getCustomerRequests = async (req, res) => {
   }
 };
 
-// Combined: My All Requests (service requests + bundles created by customer)
 exports.getCustomerAllRequests = async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
@@ -530,10 +529,15 @@ exports.getCustomerAllRequests = async (req, res) => {
       ServiceRequest.countDocuments({ customer: req.user._id }),
     ]);
 
-    // Fetch bundles created by the customer
+    // Fetch bundles where customer is either creator OR participant
     const Bundle = require("../models/Bundle");
     const [bundles, bundlesTotal] = await Promise.all([
-      Bundle.find({ creator: req.user._id })
+      Bundle.find({
+        $or: [
+          { creator: req.user._id }, // Customer created the bundle
+          { "participants.customer": req.user._id }, // Customer is a participant
+        ],
+      })
         .populate(
           "participants.customer",
           "firstName lastName profileImage address"
@@ -542,7 +546,12 @@ exports.getCustomerAllRequests = async (req, res) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
-      Bundle.countDocuments({ creator: req.user._id }),
+      Bundle.countDocuments({
+        $or: [
+          { creator: req.user._id },
+          { "participants.customer": req.user._id },
+        ],
+      }),
     ]);
 
     res.json({
@@ -575,7 +584,6 @@ exports.getCustomerAllRequests = async (req, res) => {
     });
   }
 };
-
 // Get service requests for provider
 exports.getProviderRequests = async (req, res) => {
   try {
