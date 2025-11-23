@@ -52,13 +52,8 @@ router.post(
   authorize("customer"),
   completePayment
 );
-router.get(
-  "/payment/success",
-  auth,
-  authorize("customer"),
-  handlePaymentSuccess
-);
-router.get("/payment/cancel", auth, authorize("customer"), handlePaymentCancel);
+router.get("/:moneyRequestId/payment-success", handlePaymentSuccess);
+router.get("/:moneyRequestId/payment-canceled", handlePaymentCancel);
 
 // Both provider and customer can get details and raise disputes
 router.get("/:moneyRequestId", auth, getMoneyRequest);
@@ -85,12 +80,6 @@ router.get(
   checkPaymentStatus
 );
 
-// Test webhook (for development only)
-router.post(
-  "/:moneyRequestId/test-webhook",
-  auth,
-  authorize("admin"),
-  testPaymentWebhook
-);
+
 
 module.exports = router;

@@ -3,54 +3,49 @@ const MoneyRequest = require("../models/MoneyRequest");
 const ServiceProvider = require("../models/ServiceProvider");
 
 const handleStripeWebhook = async (req, res) => {
+  let event;
+  const sig = req.headers["stripe-signature"];
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  console.log("🔔 Webhook received - Verifying signature");
+  console.log("Request headers:", JSON.stringify(req.headers, null, 2));
+  console.log("Request body:", req.body.toString());
+
   try {
-    const sig = req.headers["stripe-signature"];
+    // Get the raw body
+    const payload = req.body;
 
-    console.log("🔔 Webhook received - Headers:", {
-      "stripe-signature": sig ? "present" : "missing",
-      "content-type": req.headers["content-type"],
-      "content-length": req.headers["content-length"],
-    });
-
-    // Check if body exists and is a Buffer
-    if (!req.body || !Buffer.isBuffer(req.body)) {
-      console.error("❌ No webhook payload or payload is not a Buffer");
-      console.error("❌ Body type:", typeof req.body);
-      console.error("❌ Body:", req.body);
-      return res.status(400).send("No webhook payload was provided.");
+    if (!sig) {
+      console.error("❌ No stripe-signature header found");
+      return res.status(400).send("No stripe-signature header");
     }
-
-    console.log("✅ Raw body received, length:", req.body.length);
-
-    let event;
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
     if (!webhookSecret) {
       console.error("❌ STRIPE_WEBHOOK_SECRET is not set");
-      return res.status(400).send("Webhook secret not configured");
+      return res.status(500).send("Webhook secret not configured");
     }
 
-    try {
-      // Construct the event using the raw body
-      event = stripe.webhooks.constructEvent(
-        req.body, // This should be the raw Buffer
-        sig,
-        webhookSecret
-      );
-      console.log("✅ Webhook signature verified:", event.type);
-    } catch (err) {
-      console.error("❌ Webhook signature verification failed:", err.message);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
+    // Verify webhook signature
+    event = stripe.webhooks.constructEvent(payload, sig, webhookSecret);
+    console.log(`✅ Webhook verified: ${event.type}`);
+  } catch (err) {
+    console.error(`❌ Webhook signature verification failed: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
 
-    // Handle the event
+  // Handle the event
+  try {
     switch (event.type) {
       case "checkout.session.completed":
         console.log("💰 Processing checkout.session.completed");
         await handleCheckoutSessionCompleted(event.data.object);
         break;
+      case "checkout.session.async_payment_succeeded":
+        console.log("✅ Processing checkout.session.async_payment_succeeded");
+        await handleCheckoutSessionCompleted(event.data.object);
+        break;
       case "payment_intent.succeeded":
-        console.log("✅ Processing payment_intent.succeeded");
+        console.log("💳 Processing payment_intent.succeeded");
         await handlePaymentIntentSucceeded(event.data.object);
         break;
       case "payment_intent.payment_failed":
@@ -63,7 +58,7 @@ const handleStripeWebhook = async (req, res) => {
 
     res.json({ received: true });
   } catch (error) {
-    console.error("❌ Unexpected error in webhook handler:", error);
+    console.error("❌ Error processing webhook:", error);
     res.status(500).json({ error: "Webhook processing failed" });
   }
 };

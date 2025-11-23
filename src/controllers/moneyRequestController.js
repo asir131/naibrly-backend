@@ -9,7 +9,6 @@ const {
   calculateBundleCommission,
 } = require("./commissionController");
 
-// Create money request for completed service or bundle
 const createMoneyRequest = async (req, res) => {
   try {
     const { serviceRequestId, bundleId, amount, description, dueDate } =
@@ -38,7 +37,9 @@ const createMoneyRequest = async (req, res) => {
       });
     }
 
-    let serviceRequest, bundle, customerId;
+    let serviceRequest,
+      bundle,
+      customerIds = [];
 
     // Check if it's a service request
     if (serviceRequestId) {
@@ -56,7 +57,7 @@ const createMoneyRequest = async (req, res) => {
         });
       }
 
-      customerId = serviceRequest.customer._id;
+      customerIds = [serviceRequest.customer._id];
 
       // Check if money request already exists for this service
       const existingRequest = await MoneyRequest.findOne({
@@ -78,7 +79,9 @@ const createMoneyRequest = async (req, res) => {
         _id: bundleId,
         provider: providerId,
         status: "completed",
-      }).populate("creator");
+      })
+        .populate("participants.customer", "firstName lastName email phone")
+        .populate("creator", "firstName lastName email phone");
 
       if (!bundle) {
         return res.status(404).json({
@@ -87,18 +90,48 @@ const createMoneyRequest = async (req, res) => {
         });
       }
 
-      customerId = bundle.creator._id;
+      // Get all active participants including the creator
+      const activeParticipants = bundle.participants.filter(
+        (participant) => participant.status === "active"
+      );
 
-      // Check if money request already exists for this bundle
-      const existingRequest = await MoneyRequest.findOne({
+      // Add creator to the list if not already included
+      if (
+        bundle.creator &&
+        !activeParticipants.find(
+          (p) => p.customer._id.toString() === bundle.creator._id.toString()
+        )
+      ) {
+        customerIds = [
+          bundle.creator._id,
+          ...activeParticipants.map((p) => p.customer._id),
+        ];
+      } else {
+        customerIds = activeParticipants.map((p) => p.customer._id);
+      }
+
+      console.log(
+        `Found ${customerIds.length} customers for bundle:`,
+        customerIds
+      );
+
+      // Check if money requests already exist for any participant in this bundle
+      const existingRequests = await MoneyRequest.find({
         bundle: bundleId,
+        customer: { $in: customerIds },
         status: { $in: ["pending", "accepted", "paid"] },
       });
 
-      if (existingRequest) {
+      if (existingRequests.length > 0) {
+        const existingCustomerIds = existingRequests.map((req) =>
+          req.customer.toString()
+        );
         return res.status(400).json({
           success: false,
-          message: "Money request already exists for this bundle",
+          message: `Money requests already exist for some participants in this bundle. Customers with existing requests: ${existingCustomerIds.join(
+            ", "
+          )}`,
+          existingCustomers: existingCustomerIds,
         });
       }
     }
@@ -113,54 +146,81 @@ const createMoneyRequest = async (req, res) => {
 
     console.log("Commission calculated:", commission);
 
-    // Create money request
-    const moneyRequest = new MoneyRequest({
-      serviceRequest: serviceRequestId,
-      bundle: bundleId,
-      provider: providerId,
-      customer: customerId,
-      amount: amount,
-      totalAmount: amount,
-      description:
-        description || `Payment for ${serviceRequest ? "service" : "bundle"}`,
-      dueDate: dueDate
-        ? new Date(dueDate)
-        : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      commission: {
-        rate: commission.commissionRate,
-        amount: commission.commissionAmount,
-        providerAmount: commission.providerAmount,
-      },
-    });
+    // Create money requests for all customers
+    const moneyRequests = [];
 
-    // Set status change info
-    moneyRequest._statusChangedBy = providerId;
-    moneyRequest._statusChangedByRole = "provider";
+    for (const customerId of customerIds) {
+      const moneyRequestData = {
+        serviceRequest: serviceRequestId,
+        bundle: bundleId,
+        provider: providerId,
+        customer: customerId,
+        amount: amount,
+        totalAmount: amount,
+        description:
+          description || `Payment for ${serviceRequest ? "service" : "bundle"}`,
+        dueDate: dueDate
+          ? new Date(dueDate)
+          : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        commission: {
+          rate: commission.commissionRate,
+          amount: commission.commissionAmount,
+          providerAmount: commission.providerAmount,
+        },
+        // Set status change info
+        _statusChangedBy: providerId,
+        _statusChangedByRole: "provider",
+      };
 
-    console.log("Saving money request to database...");
+      // For bundles, you might want to split the amount among participants
+      if (bundleId && customerIds.length > 1) {
+        // Calculate split amount - you can modify this logic based on your business rules
+        const splitAmount = amount;
+        moneyRequestData.amount = splitAmount;
+        moneyRequestData.totalAmount = splitAmount;
+        moneyRequestData.description = `Payment for bundle (${customerIds.length} participants)`;
 
-    const savedRequest = await moneyRequest.save();
-    console.log("Money request saved successfully:", savedRequest._id);
+        // Recalculate commission for split amount
+        const splitCommission = serviceRequest
+          ? await calculateServiceCommission(splitAmount)
+          : await calculateBundleCommission(splitAmount);
 
-    await savedRequest.populate([
-      { path: "customer", select: "firstName lastName email phone" },
-      { path: "provider", select: "businessNameRegistered email phone" },
-      { path: "serviceRequest", select: "serviceType scheduledDate" },
-      { path: "bundle", select: "title category" },
-    ]);
+        moneyRequestData.commission = {
+          rate: splitCommission.commissionRate,
+          amount: splitCommission.commissionAmount,
+          providerAmount: splitCommission.providerAmount,
+        };
+      }
+
+      const moneyRequest = new MoneyRequest(moneyRequestData);
+      const savedRequest = await moneyRequest.save();
+
+      // Populate the saved request
+      await savedRequest.populate([
+        { path: "customer", select: "firstName lastName email phone" },
+        { path: "provider", select: "businessNameRegistered email phone" },
+        { path: "serviceRequest", select: "serviceType scheduledDate" },
+        { path: "bundle", select: "title category" },
+      ]);
+
+      moneyRequests.push(savedRequest);
+    }
+
+    console.log(`Created ${moneyRequests.length} money requests successfully`);
 
     res.status(201).json({
       success: true,
-      message: "Money request created successfully",
+      message: `Money requests created successfully for ${moneyRequests.length} customer(s)`,
       data: {
-        moneyRequest: savedRequest,
+        moneyRequests: moneyRequests,
+        totalCreated: moneyRequests.length,
       },
     });
   } catch (error) {
     console.error("Create money request error:", error);
     res.status(500).json({
       success: false,
-      message: "Failed to create money request",
+      message: "Failed to create money requests",
       error: error.message,
     });
   }
@@ -432,7 +492,6 @@ const getMoneyRequest = async (req, res) => {
   }
 };
 
-// In your moneyRequestController.js - processPayment function
 const processPayment = async (req, res) => {
   try {
     const { moneyRequestId } = req.params;
@@ -473,12 +532,12 @@ const processPayment = async (req, res) => {
         },
       ],
       mode: "payment",
-      // Redirect to backend endpoint instead of frontend
+      // Redirect to backend API endpoint instead of frontend
       success_url: `${
-        process.env.CLIENT_URL || "http://localhost:5000"
+        process.env.SERVER_URL || "http://localhost:5000"
       }/api/money-requests/${moneyRequestId}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${
-        process.env.CLIENT_URL || "http://localhost:5000"
+        process.env.SERVER_URL || "http://localhost:5000"
       }/api/money-requests/${moneyRequestId}/payment-canceled`,
       customer_email: moneyRequest.customer.email,
       metadata: {
@@ -504,13 +563,18 @@ const processPayment = async (req, res) => {
       data: {
         sessionId: session.id,
         sessionUrl: session.url,
-        checkoutUrl: session.url, // This is what the user should click
+        checkoutUrl: session.url,
         moneyRequest: {
           id: moneyRequest._id,
           amount: moneyRequest.totalAmount,
           description: moneyRequest.description,
         },
-        instructions: "Click the checkoutUrl to complete payment",
+        instructions: [
+          "1. Click the checkoutUrl to go to Stripe Checkout",
+          "2. Complete the payment in Stripe",
+          "3. You will be redirected to a backend success endpoint",
+          "4. The webhook will update the payment status automatically",
+        ],
       },
     });
   } catch (error) {
@@ -522,50 +586,137 @@ const processPayment = async (req, res) => {
     });
   }
 };
-
 // Handle successful payment redirect
 const handlePaymentSuccess = async (req, res) => {
   try {
-    const { session_id, money_request_id } = req.query;
-    const customerId = req.user._id;
+    const { session_id } = req.query;
+    const { moneyRequestId } = req.params;
 
-    console.log("Payment success callback:", { session_id, money_request_id });
+    if (!session_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing session_id parameter",
+      });
+    }
 
     // Verify the session and payment
-    const session = await stripe.checkout.sessions.retrieve(session_id);
+    const session = await stripe.checkout.sessions.retrieve(session_id, {
+      expand: ["payment_intent"],
+    });
 
-    if (session.payment_status === "paid") {
-      const moneyRequest = await MoneyRequest.findOne({
-        _id: money_request_id,
-        customer: customerId,
-      });
+    console.log("Stripe session object:", JSON.stringify(session, null, 2));
 
-      if (moneyRequest) {
-        res.json({
-          success: true,
-          message: "Payment completed successfully!",
-          data: {
-            moneyRequest: {
-              id: moneyRequest._id,
-              status: moneyRequest.status,
-              amount: moneyRequest.totalAmount,
-            },
-            session: {
-              id: session.id,
-              paymentStatus: session.payment_status,
-            },
-          },
-        });
-      } else {
-        res.status(404).json({
-          success: false,
-          message: "Money request not found",
-        });
-      }
-    } else {
-      res.status(400).json({
+    const customerId = session.metadata.customerId;
+
+    console.log("Payment success callback:", {
+      session_id,
+      moneyRequestId,
+      customerId,
+    });
+
+    console.log("Stripe session details:", {
+      id: session.id,
+      payment_status: session.payment_status,
+      status: session.status,
+      payment_intent: session.payment_intent?.id,
+      metadata: session.metadata,
+    });
+
+    // Find the money request
+    const moneyRequest = await MoneyRequest.findOne({
+      _id: moneyRequestId,
+      customer: customerId,
+    }).populate("customer provider");
+
+    if (!moneyRequest) {
+      return res.status(404).json({
         success: false,
-        message: "Payment not completed",
+        message: "Money request not found",
+      });
+    }
+
+    // Check if payment was successful
+    if (session.payment_status === "paid") {
+      // Double-check if webhook already updated the status
+      if (moneyRequest.status !== "paid") {
+        console.log("Payment successful but status not updated by webhook yet");
+
+        // You can optionally update the status here as a fallback
+        moneyRequest.status = "paid";
+        moneyRequest.paymentDetails = {
+          ...moneyRequest.paymentDetails,
+          paidAt: new Date(),
+          transactionId: session.id,
+          paymentIntentId: session.payment_intent?.id,
+          stripeCustomerId: session.customer,
+          amountReceived: session.amount_total / 100,
+          status: "completed",
+        };
+
+        // Update status history
+        if (
+          moneyRequest.statusHistory &&
+          Array.isArray(moneyRequest.statusHistory)
+        ) {
+          moneyRequest.statusHistory.push({
+            status: "paid",
+            timestamp: new Date(),
+            note: "Payment completed via Stripe Checkout (direct update)",
+            changedBy: customerId,
+            changedByRole: "customer",
+          });
+        }
+
+        await moneyRequest.save();
+        console.log(
+          "✅ Money request updated to paid status via direct update"
+        );
+      }
+
+      return res.send(`
+        <html>
+          <head>
+            <title>Payment Successful</title>
+            <style>
+              body { font-family: sans-serif; text-align: center; padding: 40px 20px; }
+              .container { max-width: 600px; margin: 0 auto; background: #f0f8ff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+              h1 { color: #2c3e50; }
+              p { color: #34495e; }
+              .details { text-align: left; margin-top: 30px; }
+              .details strong { display: inline-block; width: 150px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Payment Successful!</h1>
+              <p>Your payment has been processed successfully.</p>
+              <div class="details">
+                <p><strong>Request ID:</strong> ${moneyRequest._id}</p>
+                <p><strong>Status:</strong> ${moneyRequest.status}</p>
+                <p><strong>Amount Paid:</strong> $${(session.amount_total / 100).toFixed(2)}</p>
+                <p><strong>Transaction ID:</strong> ${session.id}</p>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+    } else {
+      console.log("Payment not completed yet, status:", session.payment_status);
+
+      return res.status(400).json({
+        success: false,
+        message: `Payment not completed. Current status: ${session.payment_status}`,
+        data: {
+          session: {
+            id: session.id,
+            paymentStatus: session.payment_status,
+            status: session.status,
+          },
+          moneyRequest: {
+            id: moneyRequest._id,
+            status: moneyRequest.status,
+          },
+        },
       });
     }
   } catch (error) {
@@ -581,28 +732,38 @@ const handlePaymentSuccess = async (req, res) => {
 // Handle canceled payment
 const handlePaymentCancel = async (req, res) => {
   try {
-    const { money_request_id } = req.query;
-    const customerId = req.user._id;
+    const { moneyRequestId } = req.params;
 
-    console.log("Payment canceled for money request:", money_request_id);
+    console.log("Payment canceled for money request:", moneyRequestId);
 
     // Update money request status
     await MoneyRequest.findOneAndUpdate(
-      { _id: money_request_id, customer: customerId },
+      { _id: moneyRequestId },
       {
         "paymentDetails.status": "checkout_canceled",
         "paymentDetails.canceledAt": new Date(),
       }
     );
 
-    res.json({
-      success: true,
-      message: "Payment canceled",
-      data: {
-        moneyRequestId: money_request_id,
-        status: "canceled",
-      },
-    });
+    res.send(`
+      <html>
+        <head>
+          <title>Payment Canceled</title>
+          <style>
+            body { font-family: sans-serif; text-align: center; padding: 40px 20px; }
+            .container { max-width: 600px; margin: 0 auto; background: #fff0f0; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+            h1 { color: #c0392b; }
+            p { color: #34495e; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Payment Canceled</h1>
+            <p>Your payment was not completed. You can close this window.</p>
+          </div>
+        </body>
+      </html>
+    `);
   } catch (error) {
     console.error("Payment cancel handler error:", error);
     res.status(500).json({
@@ -826,39 +987,87 @@ const getMoneyRequestStats = async (req, res) => {
   }
 };
 
-// Test payment endpoint
-const testPaymentWebhook = async (req, res) => {
+const debugWebhook = async (req, res) => {
   try {
-    const { moneyRequestId } = req.params;
+    const { sessionId } = req.params;
 
-    // Simulate webhook call
-    const mockSession = {
-      id: "test_session_" + Date.now(),
-      payment_status: "paid",
-      metadata: {
-        moneyRequestId: moneyRequestId,
+    console.log("🔍 Webhook Debug for session:", sessionId);
+
+    // Retrieve session from Stripe
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["payment_intent"],
+    });
+
+    // Find money request
+    const moneyRequest = await MoneyRequest.findOne({
+      "paymentDetails.checkoutSessionId": sessionId,
+    });
+
+    // Check for webhook events
+    const events = await stripe.events.list({
+      type: "checkout.session.completed",
+      created: {
+        gte: Math.floor(Date.now() / 1000) - 3600, // Last hour
       },
-      amount_total: 15000,
-      customer: "test_customer_123",
-      payment_intent: "test_pi_" + Date.now(),
-    };
+    });
 
-    await handleCheckoutSessionCompleted(mockSession);
+    const relevantEvents = events.data.filter(
+      (event) => event.data.object.id === sessionId
+    );
 
     res.json({
       success: true,
-      message: "Test webhook processed successfully",
-      moneyRequestId: moneyRequestId,
+      data: {
+        session: {
+          id: session.id,
+          payment_status: session.payment_status,
+          status: session.status,
+          payment_intent: session.payment_intent?.id,
+          payment_intent_status: session.payment_intent?.status,
+          metadata: session.metadata,
+          url: session.url,
+        },
+        moneyRequest: moneyRequest
+          ? {
+              id: moneyRequest._id,
+              status: moneyRequest.status,
+              paymentDetails: moneyRequest.paymentDetails,
+            }
+          : null,
+        webhook: {
+          eventsCount: relevantEvents.length,
+          events: relevantEvents.map((event) => ({
+            id: event.id,
+            type: event.type,
+            created: new Date(event.created * 1000).toISOString(),
+          })),
+        },
+        analysis: {
+          isPaid: session.payment_status === "paid",
+          isMoneyRequestPaid: moneyRequest?.status === "paid",
+          webhookReceived: relevantEvents.length > 0,
+          statusMatch: moneyRequest?.status === session.payment_status,
+        },
+      },
+      instructions: [
+        "If payment_status is 'paid' but moneyRequest status is not:",
+        "1. Check if webhook URL is configured in Stripe Dashboard",
+        "2. Verify STRIPE_WEBHOOK_SECRET in environment variables",
+        "3. Check webhook logs for errors",
+        "4. Test webhook with Stripe CLI",
+      ],
     });
   } catch (error) {
-    console.error("Test webhook error:", error);
+    console.error("Webhook debug error:", error);
     res.status(500).json({
       success: false,
-      message: "Test webhook failed",
+      message: "Failed to debug webhook",
       error: error.message,
     });
   }
 };
+
+
 // Add this to your moneyRequestController.js
 const checkPaymentStatus = async (req, res) => {
   try {
@@ -901,6 +1110,7 @@ const checkPaymentStatus = async (req, res) => {
 // Export all functions
 module.exports = {
   createMoneyRequest,
+  debugWebhook,
   getProviderMoneyRequests,
   getCustomerMoneyRequests,
   getMoneyRequest,
@@ -913,6 +1123,5 @@ module.exports = {
   getMoneyRequestStats,
   handlePaymentSuccess,
   handlePaymentCancel,
-  testPaymentWebhook,
   checkPaymentStatus,
 };

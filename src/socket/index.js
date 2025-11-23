@@ -539,6 +539,8 @@ const initSocket = (server) => {
       credentials: true,
     },
     connectTimeout: 30000,
+    pingInterval: 25000,
+    pingTimeout: 20000,
   });
 
   io.use(authenticateSocket);
