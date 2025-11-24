@@ -56,5 +56,12 @@ router.post(
   authorize("customer"),
   bundleController.joinBundleViaShareToken
 );
+// Allow GET for share links as well (requires bearer token in headers)
+router.get(
+  "/share/:shareToken",
+  auth,
+  authorize("customer"),
+  bundleController.joinBundleViaShareToken
+);
 
 module.exports = router;
