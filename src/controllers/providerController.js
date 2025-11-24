@@ -638,6 +638,130 @@ exports.getTopProvidersByService = async (req, res) => {
   }
 };
 
+// Provider: add a service to profile
+exports.addMyService = async (req, res) => {
+  try {
+    const { serviceName, hourlyRate } = req.body;
+
+    if (!serviceName || !serviceName.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "serviceName is required",
+      });
+    }
+
+    const provider = await ServiceProvider.findById(req.user._id);
+    if (!provider) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Provider not found" });
+    }
+
+    const exists = provider.servicesProvided.some(
+      (s) => s.name.toLowerCase() === serviceName.toLowerCase()
+    );
+
+    if (exists) {
+      return res.status(400).json({
+        success: false,
+        message: "Service already exists in your profile",
+      });
+    }
+
+    provider.servicesProvided.push({
+      name: serviceName.trim(),
+      hourlyRate: hourlyRate !== undefined ? Number(hourlyRate) : 0,
+    });
+
+    await provider.save();
+
+    res.json({
+      success: true,
+      message: "Service added successfully",
+      data: { servicesProvided: provider.servicesProvided },
+    });
+  } catch (error) {
+    console.error("Add service error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to add service",
+      error: error.message,
+    });
+  }
+};
+
+// Provider: delete a service from profile
+exports.deleteMyService = async (req, res) => {
+  try {
+    const { serviceName } = req.body;
+
+    if (!serviceName) {
+      return res.status(400).json({
+        success: false,
+        message: "serviceName is required",
+      });
+    }
+
+    const provider = await ServiceProvider.findById(req.user._id);
+    if (!provider) {
+      return res.status(404).json({ success: false, message: "Provider not found" });
+    }
+
+    const initialLength = provider.servicesProvided.length;
+    provider.servicesProvided = provider.servicesProvided.filter(
+      (s) => s.name.toLowerCase() !== serviceName.toLowerCase()
+    );
+
+    if (provider.servicesProvided.length === initialLength) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found in your profile",
+      });
+    }
+
+    await provider.save();
+
+    res.json({
+      success: true,
+      message: "Service deleted successfully",
+      data: { servicesProvided: provider.servicesProvided },
+    });
+  } catch (error) {
+    console.error("Delete service error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete service",
+      error: error.message,
+    });
+  }
+};
+
+// Public: get all providers with key profile fields
+exports.getAllProvidersInfo = async (_req, res) => {
+  try {
+    const providers = await ServiceProvider.find()
+      .select(
+        "-password -resetPasswordToken -resetPasswordExpires -approvalNotes"
+      )
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: {
+        providers,
+        total: providers.length,
+      },
+    });
+  } catch (error) {
+    console.error("Get all providers info error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch providers",
+      error: error.message,
+    });
+  }
+};
+
 // Public: get provider + selected service details by query params (clean endpoint)
 exports.getProviderServiceDetailsByQuery = async (req, res) => {
   try {

@@ -17,6 +17,9 @@ const {
   getProvidersByServiceArea,
   getTopProvidersByService,
   getProviderServiceDetailsWithReviews,
+  getAllProvidersInfo,
+  deleteMyService,
+  addMyService,
 } = require("../controllers/providerController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -41,11 +44,26 @@ router.get(
   authorize("provider"),
   getMyServiceDetail
 );
+router.post(
+  "/services/my-services",
+  auth,
+  authorize("provider"),
+  addMyService
+);
+router.delete(
+  "/services/my-services",
+  auth,
+  authorize("provider"),
+  deleteMyService
+);
 
 router.post("/service-details", getProviderServiceDetailsWithReviews);
 
 // Public query endpoint
 router.get("/service-details", getProviderServiceDetailsByQuery);
+
+// Public: list all providers
+router.get("/all", getAllProvidersInfo);
 
 // Customer feedback on a specific provider service
 router.post(

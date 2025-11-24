@@ -453,6 +453,88 @@ const getCustomerMoneyRequests = async (req, res) => {
   }
 };
 
+// Payment history for provider (paid money requests)
+const getProviderPaymentHistory = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const providerId = req.user._id;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const filter = { provider: providerId, status: "paid" };
+
+    const [moneyRequests, total] = await Promise.all([
+      MoneyRequest.find(filter)
+        .populate("customer", "firstName lastName email phone profileImage")
+        .populate("serviceRequest", "serviceType scheduledDate")
+        .populate("bundle", "title category finalPrice")
+        .sort({ paidAt: -1, updatedAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      MoneyRequest.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        payments: moneyRequests,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get provider payment history error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch payment history",
+      error: error.message,
+    });
+  }
+};
+
+// Payment history for customer (paid money requests)
+const getCustomerPaymentHistory = async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const customerId = req.user._id;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const filter = { customer: customerId, status: "paid" };
+
+    const [moneyRequests, total] = await Promise.all([
+      MoneyRequest.find(filter)
+        .populate("provider", "businessNameRegistered businessLogo email phone")
+        .populate("serviceRequest", "serviceType scheduledDate")
+        .populate("bundle", "title category finalPrice")
+        .sort({ paidAt: -1, updatedAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      MoneyRequest.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        payments: moneyRequests,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get customer payment history error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch payment history",
+      error: error.message,
+    });
+  }
+};
+
 // Get single money request details
 const getMoneyRequest = async (req, res) => {
   try {
@@ -1127,6 +1209,8 @@ module.exports = {
   debugWebhook,
   getProviderMoneyRequests,
   getCustomerMoneyRequests,
+  getProviderPaymentHistory,
+  getCustomerPaymentHistory,
   getMoneyRequest,
   acceptMoneyRequest,
   cancelMoneyRequest,

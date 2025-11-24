@@ -743,6 +743,64 @@ const logout = async (req, res) => {
   }
 };
 
+// Delete current account (customer or provider)
+const deleteAccount = async (req, res) => {
+  try {
+    const role = req.user.role;
+
+    if (role === "customer") {
+      await Customer.findByIdAndDelete(req.user._id);
+      return res.json({
+        success: true,
+        message: "Customer account deleted successfully",
+      });
+    }
+
+    if (role === "provider") {
+      await ServiceProvider.findByIdAndDelete(req.user._id);
+      return res.json({
+        success: true,
+        message: "Provider account deleted successfully",
+      });
+    }
+
+    // Protect admins from deletion via this endpoint
+    return res.status(403).json({
+      success: false,
+      message: "Account deletion not allowed for this role",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete account",
+      error: error.message,
+    });
+  }
+};
+
+// Public: get all customers (basic profile, no passwords)
+const getAllCustomers = async (_req, res) => {
+  try {
+    const customers = await Customer.find()
+      .select("-password -resetPasswordToken -resetPasswordExpires")
+      .sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: {
+        customers,
+        total: customers.length,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching customers",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   registerCustomer,
   registerProvider,
@@ -752,4 +810,6 @@ module.exports = {
   checkProviderStatus,
   getAllProviders,
   logout,
+  deleteAccount,
+  getAllCustomers,
 };

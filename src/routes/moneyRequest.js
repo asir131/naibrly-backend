@@ -6,6 +6,8 @@ const {
   createMoneyRequest,
   getProviderMoneyRequests,
   getCustomerMoneyRequests,
+  getProviderPaymentHistory,
+  getCustomerPaymentHistory,
   getMoneyRequest,
   acceptMoneyRequest,
   cancelMoneyRequest,
@@ -25,9 +27,21 @@ const { auth, authorize } = require("../middleware/auth");
 // Provider routes
 router.post("/create", auth, authorize("provider"), createMoneyRequest);
 router.get("/provider", auth, authorize("provider"), getProviderMoneyRequests);
+router.get(
+  "/provider/history",
+  auth,
+  authorize("provider"),
+  getProviderPaymentHistory
+);
 
 // Customer routes
 router.get("/customer", auth, authorize("customer"), getCustomerMoneyRequests);
+router.get(
+  "/customer/history",
+  auth,
+  authorize("customer"),
+  getCustomerPaymentHistory
+);
 router.patch(
   "/:moneyRequestId/accept",
   auth,

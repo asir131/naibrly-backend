@@ -9,6 +9,8 @@ const {
   checkProviderStatus,
   getAllProviders,
   logout,
+  deleteAccount,
+  getAllCustomers,
 } = require("../controllers/authController");
 const { auth } = require("../middleware/auth");
 
@@ -44,7 +46,7 @@ const providerUpload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     console.log("Provider upload - Fieldname:", file.fieldname);
-    const allowedFields = ["profileImage", "businessLogo"];
+    const allowedFields = ["businessLogo"];
     if (
       allowedFields.includes(file.fieldname) &&
       file.mimetype.startsWith("image/")
@@ -73,7 +75,7 @@ router.post(
 router.post(
   "/register/provider",
   providerUpload.fields([
-    { name: "businessLogo", maxCount: 1 }, // Removed profileImage
+    { name: "businessLogo", maxCount: 1 },
   ]),
   registerProvider
 );
@@ -84,7 +86,9 @@ router.post("/login", login);
 router.get("/me", auth, getMe);
 router.get("/provider/status", auth, checkProviderStatus);
 router.get("/providers", getAllProviders);
+router.get("/customers", getAllCustomers);
 router.patch("/provider/approve/:providerId", auth, approveProvider);
 router.post("/logout", auth, logout);
+router.delete("/delete-account", auth, deleteAccount);
 
 module.exports = router;
