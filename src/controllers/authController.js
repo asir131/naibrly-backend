@@ -727,6 +727,22 @@ const getAllProviders = async (req, res) => {
   }
 };
 
+// Stateless logout: instruct client to discard JWT
+const logout = async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: "Logged out successfully. Please remove your token on the client.",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Logout failed",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   registerCustomer,
   registerProvider,
@@ -735,4 +751,5 @@ module.exports = {
   approveProvider,
   checkProviderStatus,
   getAllProviders,
+  logout,
 };

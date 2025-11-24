@@ -277,6 +277,129 @@ const getAllServices = async (req, res) => {
   }
 };
 
+// Search services by query against service, categoryType, or category name/description
+const searchServices = async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query || !query.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Query parameter is required",
+      });
+    }
+
+    const searchRegex = new RegExp(query.trim(), "i");
+
+    const services = await Service.find({
+      isActive: true,
+      $or: [{ name: searchRegex }, { description: searchRegex }],
+    })
+      .sort({ name: 1 })
+      .populate({
+        path: "categoryType",
+        populate: {
+          path: "category",
+        },
+      });
+
+    // Filter to include matches that come via categoryType or category even if service name didn't match
+    const filtered = services.filter((service) => {
+      const categoryType = service.categoryType;
+      const category = categoryType?.category;
+
+      const matchesService =
+        searchRegex.test(service.name || "") ||
+        searchRegex.test(service.description || "");
+      const matchesCategoryType =
+        categoryType && searchRegex.test(categoryType.name || "");
+      const matchesCategory =
+        category && searchRegex.test(category.name || "");
+
+      return matchesService || matchesCategoryType || matchesCategory;
+    });
+
+    res.json({
+      success: true,
+      data: { services: filtered },
+    });
+  } catch (error) {
+    console.error("Search services error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search services",
+      error: error.message,
+    });
+  }
+};
+
+// Search categories (and include matching categoryTypes and their services)
+const searchCategories = async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query || !query.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Query parameter is required",
+      });
+    }
+
+    const searchRegex = new RegExp(query.trim(), "i");
+
+    // Find matching categories
+    const categories = await Category.find({
+      name: searchRegex,
+      isActive: true,
+    })
+      .sort({ order: 1, name: 1 })
+      .lean();
+
+    // For each category, fetch its active categoryTypes and services
+    const result = [];
+    for (const cat of categories) {
+      const catTypes = await CategoryType.find({
+        category: cat._id,
+        isActive: true,
+      })
+        .sort({ order: 1, name: 1 })
+        .lean();
+
+      const typesWithServices = [];
+      for (const ct of catTypes) {
+        const ctServices = await Service.find({
+          categoryType: ct._id,
+          isActive: true,
+        })
+          .sort({ name: 1 })
+          .lean();
+
+        typesWithServices.push({
+          ...ct,
+          services: ctServices,
+        });
+      }
+
+      result.push({
+        ...cat,
+        categoryTypes: typesWithServices,
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { categories: result },
+    });
+  } catch (error) {
+    console.error("Search categories error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to search categories",
+      error: error.message,
+    });
+  }
+};
+
 // Get initialization status
 const getInitializationStatus = async (req, res) => {
   try {
@@ -541,6 +664,8 @@ module.exports = {
   initializeDefaults,
   getAllCategories,
   getAllServices,
+  searchServices,
+  searchCategories,
   getInitializationStatus,
   createCategoryTypeWithServices,
   addServiceToCategoryType,

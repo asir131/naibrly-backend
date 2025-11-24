@@ -536,7 +536,6 @@ exports.getTopProvidersByService = async (req, res) => {
     const { serviceName } = req.body;
     const { page = 1, limit = 10 } = req.query;
 
-    // Validate input
     if (!serviceName) {
       return res.status(400).json({
         success: false,
@@ -545,41 +544,21 @@ exports.getTopProvidersByService = async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const serviceRegex = new RegExp(`^${serviceName}$`, "i");
 
-    // Aggregate to get top providers for the specific service
-    const topProviders = await ServiceRequest.aggregate([
-      // Match completed service requests with reviews for the specific service
-      {
-        $match: {
-          status: "completed",
-          "review.rating": { $exists: true, $gte: 1 },
-          serviceType: serviceName,
-        },
-      },
-      // Group by provider and calculate ratings
+    // Aggregate feedback to rank providers by average rating for the given service
+    const topProviders = await ProviderServiceFeedback.aggregate([
+      { $match: { serviceName: serviceRegex } },
       {
         $group: {
           _id: "$provider",
-          averageRating: { $avg: "$review.rating" },
+          averageRating: { $avg: "$rating" },
           totalReviews: { $sum: 1 },
-          totalJobs: { $sum: 1 },
         },
       },
-      // Sort by average rating (descending) and total reviews (descending)
-      {
-        $sort: {
-          averageRating: -1,
-          totalReviews: -1,
-        },
-      },
-      // Skip and limit for pagination
-      {
-        $skip: skip,
-      },
-      {
-        $limit: parseInt(limit),
-      },
-      // Lookup provider details
+      { $sort: { averageRating: -1, totalReviews: -1 } },
+      { $skip: skip },
+      { $limit: parseInt(limit) },
       {
         $lookup: {
           from: "serviceproviders",
@@ -588,17 +567,12 @@ exports.getTopProvidersByService = async (req, res) => {
           as: "providerDetails",
         },
       },
-      // Unwind provider details
-      {
-        $unwind: "$providerDetails",
-      },
-      // Project only required fields
+      { $unwind: "$providerDetails" },
       {
         $project: {
           _id: 1,
           averageRating: { $round: ["$averageRating", 2] },
           totalReviews: 1,
-          totalJobs: 1,
           "providerDetails.businessNameRegistered": 1,
           "providerDetails.profileImage": 1,
           "providerDetails.businessLogo": 1,
@@ -613,29 +587,15 @@ exports.getTopProvidersByService = async (req, res) => {
       },
     ]);
 
-    // Get total count for pagination
-    const totalCount = await ServiceRequest.aggregate([
-      {
-        $match: {
-          status: "completed",
-          "review.rating": { $exists: true, $gte: 1 },
-          serviceType: serviceName,
-        },
-      },
-      {
-        $group: {
-          _id: "$provider",
-        },
-      },
-      {
-        $count: "totalProviders",
-      },
+    const totalCount = await ProviderServiceFeedback.aggregate([
+      { $match: { serviceName: serviceRegex } },
+      { $group: { _id: "$provider" } },
+      { $count: "totalProviders" },
     ]);
 
     const totalProviders =
       totalCount.length > 0 ? totalCount[0].totalProviders : 0;
 
-    // Format the response
     const formattedProviders = topProviders.map((provider) => ({
       id: provider._id,
       businessName: provider.providerDetails.businessNameRegistered,
@@ -643,16 +603,15 @@ exports.getTopProvidersByService = async (req, res) => {
       businessLogo: provider.providerDetails.businessLogo,
       averageRating: provider.averageRating,
       totalReviews: provider.totalReviews,
-      totalJobsCompleted: provider.totalJobs,
+      totalJobsCompleted: provider.providerDetails.totalJobsCompleted,
       serviceAreas: provider.providerDetails.serviceAreas,
       servicesProvided: provider.providerDetails.servicesProvided,
       description: provider.providerDetails.description,
       experience: provider.providerDetails.experience,
       isAvailable: provider.providerDetails.isAvailable,
       isVerified: provider.providerDetails.isVerified,
-      // Include specific service details if available
       serviceDetails: provider.providerDetails.servicesProvided.find(
-        (service) => service.name === serviceName
+        (service) => service.name.toLowerCase() === serviceName.toLowerCase()
       ),
     }));
 

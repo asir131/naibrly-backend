@@ -3,6 +3,8 @@ const {
   getAllCategories,
   createCategoryTypeWithServices,
   getAllServices,
+  searchServices,
+  searchCategories,
   initializeDefaultData,
   addServiceToCategoryType,
 } = require("../controllers/categoryController");
@@ -15,6 +17,8 @@ const router = express.Router();
 
 // Public routes
 router.get("/services", getAllServices);
+router.get("/services/search", searchServices);
+router.get("/search", searchCategories);
 
 // Admin routes
 router.get("/", auth, authorize("admin"), getAllCategories);

@@ -2,6 +2,7 @@ const ServiceRequest = require("../models/ServiceRequest");
 const ServiceProvider = require("../models/ServiceProvider");
 const Customer = require("../models/Customer");
 const Service = require("../models/Service");
+const Bundle = require("../models/Bundle");
 const { calculateServiceCommission } = require("./commissionController");
 
 // Helper function to get default price based on service type
@@ -604,6 +605,43 @@ exports.getProviderRequests = async (req, res) => {
 
     const total = await ServiceRequest.countDocuments(filter);
 
+    // Also fetch bundles assigned to this provider
+    const bundleFilter = { provider: req.user._id };
+    if (status) bundleFilter.status = status;
+
+    const bundles = await Bundle.find(bundleFilter)
+      .populate("creator", "firstName lastName email phone profileImage address")
+      .populate(
+        "participants.customer",
+        "firstName lastName email phone profileImage address"
+      )
+      .sort({ createdAt: -1 });
+
+    // Flatten bundle participants into individual "requests"
+    const bundleRequests = [];
+    bundles.forEach((bundle) => {
+      const participants = bundle.participants || [];
+      participants.forEach((p, idx) => {
+        bundleRequests.push({
+          _id: `${bundle._id}-${p.customer?._id || idx}`,
+          bundleId: bundle._id,
+          title: bundle.title,
+          category: bundle.category,
+          categoryTypeName: bundle.categoryTypeName,
+          services: bundle.services,
+          serviceDate: bundle.serviceDate,
+          serviceTimeStart: bundle.serviceTimeStart,
+          serviceTimeEnd: bundle.serviceTimeEnd,
+          status: bundle.status,
+          participant: p.customer,
+          participantNumber: idx + 1,
+          participantsCount: participants.length,
+          creator: bundle.creator,
+          createdAt: bundle.createdAt,
+        });
+      });
+    });
+
     // Format response for frontend
     const formattedRequests = serviceRequests.map((request) => ({
       _id: request._id,
@@ -624,6 +662,10 @@ exports.getProviderRequests = async (req, res) => {
       success: true,
       data: {
         serviceRequests: formattedRequests,
+        bundles: {
+          requests: bundleRequests,
+          total: bundleRequests.length,
+        },
         pagination: {
           current: parseInt(page),
           total,

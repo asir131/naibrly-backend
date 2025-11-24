@@ -381,7 +381,7 @@ exports.getBundlesByZipCode = async (req, res) => {
       zipCode: zipCode,
       status: { $in: ["pending", "accepted"] },
       expiresAt: { $gt: new Date() },
-      currentParticipants: { $lt: "$maxParticipants" }, // Has available spots
+      currentParticipants: { $lt: "$maxParticipants" }, // Has available spotss
     };
 
     if (category) {

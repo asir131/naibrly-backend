@@ -8,6 +8,7 @@ const {
   approveProvider,
   checkProviderStatus,
   getAllProviders,
+  logout,
 } = require("../controllers/authController");
 const { auth } = require("../middleware/auth");
 
@@ -84,5 +85,6 @@ router.get("/me", auth, getMe);
 router.get("/provider/status", auth, checkProviderStatus);
 router.get("/providers", getAllProviders);
 router.patch("/provider/approve/:providerId", auth, approveProvider);
+router.post("/logout", auth, logout);
 
 module.exports = router;

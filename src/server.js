@@ -13,12 +13,37 @@ const { initializeDefaultData } = require("./controllers/categoryController");
 const { uploadProfileImage } = require("./config/cloudinary");
 const { initializeBundleSettings } = require("./controllers/bundleController");
 const { initSocket } = require("./socket");
+const Conversation = require("./models/Conversation");
 const {
   initializeCommissionSettings,
 } = require("./controllers/commissionController");
 
 // Connect to database
 connectDB();
+
+// Ensure conversation indexes support per-participant bundle chats
+const ensureConversationIndexes = async () => {
+  try {
+    await Conversation.collection.dropIndex("bundleId_1");
+    console.log("Dropped legacy bundleId_1 index on conversations");
+  } catch (err) {
+    if (err.codeName !== "IndexNotFound" && err.code !== 27) {
+      console.error("Error dropping legacy bundleId_1 index:", err.message);
+    }
+  }
+
+  try {
+    await Conversation.collection.createIndex(
+      { bundleId: 1, customerId: 1 },
+      { unique: true, sparse: true }
+    );
+    console.log("Ensured composite index on { bundleId, customerId } for conversations");
+  } catch (err) {
+    console.error("Error ensuring conversation composite index:", err.message);
+  }
+};
+
+ensureConversationIndexes();
 
 const app = express();
 

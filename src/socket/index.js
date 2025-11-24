@@ -177,7 +177,144 @@ async function getOrCreateConversation(socket, requestId, bundleId) {
   }
 }
 
+// New helper to support per-participant bundle conversations
+async function getOrCreateConversationV2(
+  socket,
+  { requestId, bundleId, customerIdForBundle }
+) {
+  try {
+    console.log("[chat] getOrCreateConversationV2:", {
+      requestId,
+      bundleId,
+      customerIdForBundle,
+      socketUser: socket.userId,
+      socketRole: socket.userRole,
+    });
+
+    if (!requestId && !bundleId) {
+      throw new Error("Either requestId or bundleId is required");
+    }
+
+    if (requestId) {
+      const serviceRequest = await ServiceRequest.findById(requestId)
+        .populate("customer")
+        .populate("provider");
+
+      if (!serviceRequest) throw new Error("Service request not found");
+
+      const hasAccess =
+        socket.userId === serviceRequest.customer._id.toString() ||
+        (serviceRequest.provider &&
+          socket.userId === serviceRequest.provider._id.toString());
+
+      if (!hasAccess) throw new Error("Access denied to this conversation");
+
+      let conversation = await Conversation.findOne({ requestId });
+      if (!conversation) {
+        conversation = await Conversation.create({
+          customerId: serviceRequest.customer._id,
+          providerId: serviceRequest.provider._id,
+          requestId,
+          messages: [],
+          isActive: true,
+        });
+      }
+      return conversation;
+    }
+
+    // Bundle conversation (per participant)
+    const bundle = await Bundle.findById(bundleId)
+      .populate("creator")
+      .populate("provider")
+      .populate("participants.customer")
+      .populate("providerOffers.provider");
+
+    if (!bundle) throw new Error("Bundle not found");
+
+    const isCreator =
+      bundle.creator && socket.userId === bundle.creator._id.toString();
+    const isProvider =
+      bundle.provider && socket.userId === bundle.provider._id.toString();
+    const isOfferProvider = bundle.providerOffers?.some(
+      (o) => o.provider && o.provider.toString() === socket.userId
+    );
+    const isParticipant = bundle.participants?.some(
+      (p) => p.customer && p.customer._id.toString() === socket.userId
+    );
+
+    if (!isCreator && !isProvider && !isParticipant && !isOfferProvider) {
+      throw new Error("Access denied to this bundle conversation");
+    }
+
+    let targetCustomerId;
+    if (socket.userRole === "customer") {
+      targetCustomerId = socket.userId; // participant or creator
+    } else if (customerIdForBundle) {
+      targetCustomerId = customerIdForBundle; // provider targets a participant/creator
+    } else if (bundle.creator) {
+      targetCustomerId = bundle.creator._id.toString(); // fallback
+    }
+
+    const targetIsParticipantOrCreator =
+      (bundle.creator && bundle.creator._id.toString() === targetCustomerId) ||
+      bundle.participants?.some(
+        (p) => p.customer && p.customer._id.toString() === targetCustomerId
+      );
+
+    if (!targetIsParticipantOrCreator) {
+      throw new Error("Target customer is not part of this bundle");
+    }
+
+    let conversation = await Conversation.findOne({
+      bundleId,
+      customerId: targetCustomerId,
+    });
+
+    if (!conversation) {
+      conversation = await Conversation.create({
+        customerId: targetCustomerId,
+        providerId: bundle.provider
+          ? bundle.provider._id
+          : socket.userRole === "provider"
+          ? socket.userId
+          : null,
+        bundleId,
+        messages: [],
+        isActive: true,
+      });
+    }
+
+    return conversation;
+  } catch (error) {
+    console.error("[chat] getOrCreateConversationV2 error:", error.message);
+    throw error;
+  }
+}
+
 // Helper functions
+// Create conversations for all bundle participants (including creator)
+async function createParticipantConversations(socket, bundle) {
+  const participantIds = new Set();
+  if (bundle.creator?._id) {
+    participantIds.add(bundle.creator._id.toString());
+  }
+  bundle.participants?.forEach((p) => {
+    if (p.customer?._id) {
+      participantIds.add(p.customer._id.toString());
+    }
+  });
+
+  const conversations = [];
+  for (const customerId of participantIds) {
+    const conv = await getOrCreateConversationV2(socket, {
+      bundleId: bundle._id.toString(),
+      customerIdForBundle: customerId,
+    });
+    conversations.push(conv);
+  }
+  return conversations;
+}
+
 async function handleJoinConversation(socket, data) {
   try {
     console.log("👥 Join conversation request:", data);
@@ -190,7 +327,7 @@ async function handleJoinConversation(socket, data) {
       return;
     }
 
-    const { requestId, bundleId } = data;
+    const { requestId, bundleId, customerId } = data;
 
     if (!requestId && !bundleId) {
       socket.emit("message", {
@@ -200,11 +337,57 @@ async function handleJoinConversation(socket, data) {
       return;
     }
 
-    const conversation = await getOrCreateConversation(
-      socket,
+    // Provider joins by bundleId only -> create conversations for all participants
+    if (bundleId && socket.userRole === "provider" && !customerId) {
+      const bundle = await Bundle.findById(bundleId)
+        .populate("creator")
+        .populate("provider")
+        .populate("participants.customer")
+        .populate("providerOffers.provider");
+
+      if (!bundle) {
+        throw new Error("Bundle not found");
+      }
+
+      const isCreator =
+        bundle.creator && socket.userId === bundle.creator._id.toString();
+      const isProvider =
+        bundle.provider && socket.userId === bundle.provider._id.toString();
+      const isOfferProvider = bundle.providerOffers?.some(
+        (o) => o.provider && o.provider.toString() === socket.userId
+      );
+
+      if (!isProvider && !isOfferProvider && !isCreator) {
+        throw new Error("Access denied to this bundle conversation");
+      }
+
+      const conversations = await createParticipantConversations(
+        socket,
+        bundle
+      );
+
+      conversations.forEach((conv) => socket.join(`conversation_${conv._id}`));
+
+      socket.emit("message", {
+        type: "joined_conversation",
+        data: {
+          bundleId,
+          conversations: conversations.map((c) => ({
+            conversationId: c._id,
+            customerId: c.customerId,
+          })),
+          message: "Joined all participant conversations for this bundle",
+          timestamp: new Date().toISOString(),
+        },
+      });
+      return;
+    }
+
+    const conversation = await getOrCreateConversationV2(socket, {
       requestId,
-      bundleId
-    );
+      bundleId,
+      customerIdForBundle: customerId,
+    });
 
     if (conversation) {
       socket.join(`conversation_${conversation._id}`);
@@ -273,7 +456,7 @@ async function handleSendQuickChat(socket, data) {
       return;
     }
 
-    const { requestId, bundleId, quickChatId } = data;
+    const { requestId, bundleId, quickChatId, customerId } = data;
 
     if (!quickChatId) {
       socket.emit("message", {
@@ -324,11 +507,11 @@ async function handleSendQuickChat(socket, data) {
 
     // Get or create conversation
     console.log("🔄 Getting or creating conversation...");
-    const conversation = await getOrCreateConversation(
-      socket,
+    const conversation = await getOrCreateConversationV2(socket, {
       requestId,
-      bundleId
-    );
+      bundleId,
+      customerIdForBundle: customerId,
+    });
 
     if (!conversation) {
       console.log("❌ Conversation not found after getOrCreate");
@@ -530,19 +713,21 @@ async function handleAuthenticate(socket, data) {
 
 async function handleGetConversation(socket, data) {
   try {
-    const { requestId, bundleId } = data;
+    const { requestId, bundleId, customerId } = data;
 
-    const query = {};
-    if (requestId) query.requestId = requestId;
-    if (bundleId) query.bundleId = bundleId;
-
-    const conversation = await Conversation.findOne(query)
-      .populate("customerId", "firstName lastName profileImage")
-      .populate(
-        "providerId",
-        "firstName lastName businessNameRegistered profileImage"
-      )
-      .sort({ "messages.timestamp": 1 });
+    const conversation = await getOrCreateConversationV2(socket, {
+      requestId,
+      bundleId,
+      customerIdForBundle: customerId,
+    }).then((conv) =>
+      Conversation.findById(conv._id)
+        .populate("customerId", "firstName lastName profileImage")
+        .populate(
+          "providerId",
+          "firstName lastName businessNameRegistered profileImage"
+        )
+        .sort({ "messages.timestamp": 1 })
+    );
 
     if (conversation) {
       socket.emit("message", {
