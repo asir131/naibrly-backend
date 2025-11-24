@@ -72,7 +72,7 @@ router.post("/send-message", auth, async (req, res) => {
       });
     }
 
-    // Check if user has access
+    // Check if user has access to the conversation
     const hasAccess =
       req.user._id.toString() === serviceRequest.customer.toString() ||
       req.user._id.toString() === serviceRequest.provider.toString();
@@ -89,13 +89,35 @@ router.post("/send-message", auth, async (req, res) => {
 
     if (quickChatId) {
       const quickChat = await QuickChat.findById(quickChatId);
+
       if (quickChat) {
+        // Check if user has permission to use this quick chat
+        const canUseQuickChat =
+          // User can use their own quick chats
+          quickChat.createdBy.toString() === req.user._id.toString() ||
+          // User can use admin-created quick chats
+          quickChat.createdByRole === "admin" ||
+          // User can use quick chats from the same role
+          quickChat.createdByRole === req.user.role;
+
+        if (!canUseQuickChat) {
+          return res.status(403).json({
+            success: false,
+            message: "You don't have permission to use this quick chat",
+          });
+        }
+
         content = quickChat.content;
         quickChatUsed = quickChat._id;
 
         // Increment usage count
         quickChat.usageCount += 1;
         await quickChat.save();
+      } else {
+        return res.status(404).json({
+          success: false,
+          message: "Quick chat not found",
+        });
       }
     }
 

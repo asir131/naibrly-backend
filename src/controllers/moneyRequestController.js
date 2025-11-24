@@ -40,6 +40,7 @@ const createMoneyRequest = async (req, res) => {
     let serviceRequest,
       bundle,
       customerIds = [];
+    let finalAmount = amount;
 
     // Check if it's a service request
     if (serviceRequestId) {
@@ -115,6 +116,14 @@ const createMoneyRequest = async (req, res) => {
         customerIds
       );
 
+      // Apply bundle discount to get final amount
+      if (bundle.bundleDiscount && bundle.bundleDiscount > 0) {
+        finalAmount = amount - (amount * bundle.bundleDiscount) / 100;
+        console.log(
+          `Applied ${bundle.bundleDiscount}% discount: Original amount: ${amount}, Final amount: ${finalAmount}`
+        );
+      }
+
       // Check if money requests already exist for any participant in this bundle
       const existingRequests = await MoneyRequest.find({
         bundle: bundleId,
@@ -136,12 +145,12 @@ const createMoneyRequest = async (req, res) => {
       }
     }
 
-    // Calculate commission based on service or bundle
+    // Calculate commission based on service or bundle using the final amount
     let commission;
     if (serviceRequest) {
-      commission = await calculateServiceCommission(amount);
+      commission = await calculateServiceCommission(finalAmount);
     } else if (bundle) {
-      commission = await calculateBundleCommission(amount);
+      commission = await calculateBundleCommission(finalAmount);
     }
 
     console.log("Commission calculated:", commission);
@@ -155,8 +164,8 @@ const createMoneyRequest = async (req, res) => {
         bundle: bundleId,
         provider: providerId,
         customer: customerId,
-        amount: amount,
-        totalAmount: amount,
+        amount: finalAmount, // Use the final amount after discount
+        totalAmount: finalAmount, // Use the final amount after discount
         description:
           description || `Payment for ${serviceRequest ? "service" : "bundle"}`,
         dueDate: dueDate
@@ -167,29 +176,23 @@ const createMoneyRequest = async (req, res) => {
           amount: commission.commissionAmount,
           providerAmount: commission.providerAmount,
         },
+        // Store original amount and discount info for bundles
+        ...(bundleId && {
+          originalAmount: amount,
+          discount: bundle.bundleDiscount || 0,
+          discountType: "percentage",
+        }),
         // Set status change info
         _statusChangedBy: providerId,
         _statusChangedByRole: "provider",
       };
 
-      // For bundles, you might want to split the amount among participants
-      if (bundleId && customerIds.length > 1) {
-        // Calculate split amount - you can modify this logic based on your business rules
-        const splitAmount = amount;
-        moneyRequestData.amount = splitAmount;
-        moneyRequestData.totalAmount = splitAmount;
-        moneyRequestData.description = `Payment for bundle (${customerIds.length} participants)`;
-
-        // Recalculate commission for split amount
-        const splitCommission = serviceRequest
-          ? await calculateServiceCommission(splitAmount)
-          : await calculateBundleCommission(splitAmount);
-
-        moneyRequestData.commission = {
-          rate: splitCommission.commissionRate,
-          amount: splitCommission.commissionAmount,
-          providerAmount: splitCommission.providerAmount,
-        };
+      // For bundles, add bundle-specific description
+      if (bundleId) {
+        const discountText = bundle.bundleDiscount
+          ? ` with ${bundle.bundleDiscount}% discount applied`
+          : "";
+        moneyRequestData.description = `Payment for bundle${discountText} (${customerIds.length} participants)`;
       }
 
       const moneyRequest = new MoneyRequest(moneyRequestData);
@@ -200,13 +203,20 @@ const createMoneyRequest = async (req, res) => {
         { path: "customer", select: "firstName lastName email phone" },
         { path: "provider", select: "businessNameRegistered email phone" },
         { path: "serviceRequest", select: "serviceType scheduledDate" },
-        { path: "bundle", select: "title category" },
+        { path: "bundle", select: "title category bundleDiscount" },
       ]);
 
       moneyRequests.push(savedRequest);
     }
 
     console.log(`Created ${moneyRequests.length} money requests successfully`);
+    console.log(
+      `Each customer pays: $${finalAmount}${
+        bundleId && bundle.bundleDiscount
+          ? ` (after ${bundle.bundleDiscount}% discount from $${amount})`
+          : ""
+      }`
+    );
 
     res.status(201).json({
       success: true,
@@ -214,6 +224,9 @@ const createMoneyRequest = async (req, res) => {
       data: {
         moneyRequests: moneyRequests,
         totalCreated: moneyRequests.length,
+        bundleDiscount: bundleId ? bundle.bundleDiscount : undefined,
+        originalAmount: bundleId ? amount : undefined,
+        finalAmount: bundleId ? finalAmount : undefined,
       },
     });
   } catch (error) {
@@ -693,7 +706,9 @@ const handlePaymentSuccess = async (req, res) => {
               <div class="details">
                 <p><strong>Request ID:</strong> ${moneyRequest._id}</p>
                 <p><strong>Status:</strong> ${moneyRequest.status}</p>
-                <p><strong>Amount Paid:</strong> $${(session.amount_total / 100).toFixed(2)}</p>
+                <p><strong>Amount Paid:</strong> $${(
+                  session.amount_total / 100
+                ).toFixed(2)}</p>
                 <p><strong>Transaction ID:</strong> ${session.id}</p>
               </div>
             </div>
@@ -1066,7 +1081,6 @@ const debugWebhook = async (req, res) => {
     });
   }
 };
-
 
 // Add this to your moneyRequestController.js
 const checkPaymentStatus = async (req, res) => {

@@ -1,7 +1,7 @@
 const ServiceProvider = require("../models/ServiceProvider");
 const ProviderServiceFeedback = require("../models/ProviderServiceFeedback");
 const Customer = require("../models/Customer");
-
+const mongoose = require("mongoose");
 // Update provider's bundle capacity
 exports.updateProviderCapacity = async (req, res) => {
   try {
@@ -120,13 +120,11 @@ exports.getProviderServices = async (req, res) => {
     });
   } catch (error) {
     console.error("Get provider services error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch services",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch services",
+      error: error.message,
+    });
   }
 };
 
@@ -157,16 +155,186 @@ exports.getMyServices = async (req, res) => {
     });
   } catch (error) {
     console.error("Get my services error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch services",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch services",
+      error: error.message,
+    });
   }
 };
 
+// controllers/providerController.js
+
+exports.getProviderServiceDetailsWithReviews = async (req, res) => {
+  try {
+    const { providerId, serviceName } = req.body;
+    const { page = 1, limit = 10 } = req.query;
+
+    // Validate input
+    if (!providerId || !serviceName) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Provider ID and service name are required in the request body",
+      });
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Get provider details
+    const provider = await ServiceProvider.findById(providerId).select(
+      "businessNameRegistered profileImage businessLogo servicesProvided description experience rating totalReviews totalJobsCompleted isVerified"
+    );
+
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    // Find the selected service
+    const selectedService = provider.servicesProvided.find(
+      (service) => service.name === serviceName
+    );
+
+    if (!selectedService) {
+      return res.status(404).json({
+        success: false,
+        message: "Service not found for this provider",
+      });
+    }
+
+    // Get other services (excluding the selected one)
+    const otherServices = provider.servicesProvided.filter(
+      (service) => service.name !== serviceName
+    );
+
+    // Get all reviews for this provider from ServiceRequest
+    const reviewsQuery = {
+      provider: providerId,
+      status: "completed",
+      "review.rating": { $exists: true },
+    };
+
+    const [reviews, totalReviews, ratingStats] = await Promise.all([
+      // Get paginated reviews
+      ServiceRequest.find(reviewsQuery)
+        .select("review customer serviceType scheduledDate")
+        .populate("customer", "firstName lastName profileImage")
+        .sort({ "review.createdAt": -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+
+      // Get total reviews count
+      ServiceRequest.countDocuments(reviewsQuery),
+
+      // Get rating statistics
+      ServiceRequest.aggregate([
+        {
+          $match: {
+            provider: new mongoose.Types.ObjectId(providerId),
+            status: "completed",
+            "review.rating": { $exists: true },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            averageRating: { $avg: "$review.rating" },
+            totalRatings: { $sum: 1 },
+            ratingDistribution: {
+              $push: "$review.rating",
+            },
+          },
+        },
+      ]),
+    ]);
+
+    // Calculate rating distribution
+    let ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    if (ratingStats.length > 0 && ratingStats[0].ratingDistribution) {
+      ratingStats[0].ratingDistribution.forEach((rating) => {
+        const roundedRating = Math.round(rating);
+        if (ratingDistribution[roundedRating] !== undefined) {
+          ratingDistribution[roundedRating]++;
+        }
+      });
+    }
+
+    const averageRating =
+      ratingStats.length > 0
+        ? Number(ratingStats[0].averageRating.toFixed(2))
+        : 0;
+
+    // Format reviews response
+    const formattedReviews = reviews.map((review) => ({
+      id: review._id,
+      rating: review.review.rating,
+      comment: review.review.comment,
+      createdAt: review.review.createdAt,
+      customer: {
+        id: review.customer._id,
+        firstName: review.customer.firstName,
+        lastName: review.customer.lastName,
+        profileImage: review.customer.profileImage,
+      },
+      serviceName: review.serviceType,
+      serviceDate: review.scheduledDate,
+    }));
+
+    // Prepare response data
+    const responseData = {
+      provider: {
+        id: provider._id,
+        businessName: provider.businessNameRegistered,
+        profileImage: provider.profileImage,
+        businessLogo: provider.businessLogo,
+        description: provider.description,
+        experience: provider.experience,
+        totalJobsCompleted: provider.totalJobsCompleted,
+        isVerified: provider.isVerified,
+      },
+      selectedService: {
+        name: selectedService.name,
+        hourlyRate: selectedService.hourlyRate,
+        // Add any other service-specific fields you have
+      },
+      otherServices: otherServices.map((service) => ({
+        name: service.name,
+        hourlyRate: service.hourlyRate,
+      })),
+      reviews: {
+        statistics: {
+          averageRating,
+          totalReviews: totalReviews,
+          ratingDistribution,
+        },
+        list: formattedReviews,
+        pagination: {
+          current: parseInt(page),
+          total: totalReviews,
+          pages: Math.ceil(totalReviews / parseInt(limit)),
+          limit: parseInt(limit),
+        },
+      },
+    };
+
+    res.json({
+      success: true,
+      data: responseData,
+    });
+  } catch (error) {
+    console.error("Get provider service details with reviews error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch provider service details",
+      error: error.message,
+    });
+  }
+};
+
+const ServiceRequest = require("../models/ServiceRequest");
 // Public: get a specific service, other services, and feedback (by providerId)
 exports.getProviderServiceDetailWithFeedback = async (req, res) => {
   try {
@@ -187,47 +355,56 @@ exports.getProviderServiceDetailWithFeedback = async (req, res) => {
       (s) => s.name === serviceName
     );
     if (!selectedService) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Service not found for this provider",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Service not found for this provider",
+      });
     }
 
     const otherServices = provider.servicesProvided.filter(
       (s) => s.name !== serviceName
     );
 
-    // Feedback aggregation & list
+    // Feedback aggregation & list from ServiceRequest for all services of the provider
+    const feedbackQuery = {
+      provider: providerId,
+      status: "completed",
+      "review.rating": { $exists: true },
+    };
+
     const [feedback, total, agg] = await Promise.all([
-      ProviderServiceFeedback.find({ provider: providerId, serviceName })
+      ServiceRequest.find(feedbackQuery)
+        .select("review customer serviceType")
         .populate("customer", "firstName lastName profileImage")
-        .sort({ createdAt: -1 })
+        .sort({ "review.createdAt": -1 })
         .skip(skip)
         .limit(parseInt(limit)),
-      ProviderServiceFeedback.countDocuments({
-        provider: providerId,
-        serviceName,
-      }),
-      ProviderServiceFeedback.aggregate([
+      ServiceRequest.countDocuments(feedbackQuery),
+      ServiceRequest.aggregate([
         {
           $match: {
+            ...feedbackQuery,
             provider: new (require("mongoose").Types.ObjectId)(providerId),
-            serviceName,
           },
         },
         {
           $group: {
             _id: null,
-            avgRating: { $avg: "$rating" },
-            count: { $sum: 1 },
+            avgRating: { $avg: "$review.rating" },
           },
         },
       ]),
     ]);
 
     const averageRating = agg.length ? Number(agg[0].avgRating.toFixed(2)) : 0;
+
+    const feedbackList = feedback.map((sr) => ({
+      rating: sr.review.rating,
+      comment: sr.review.comment,
+      createdAt: sr.review.createdAt,
+      customer: sr.customer,
+      serviceName: sr.serviceType, // This now shows the actual service name from the service request
+    }));
 
     res.json({
       success: true,
@@ -241,7 +418,7 @@ exports.getProviderServiceDetailWithFeedback = async (req, res) => {
         selectedService,
         otherServices,
         feedback: {
-          list: feedback,
+          list: feedbackList,
           pagination: {
             current: parseInt(page),
             total,
@@ -256,16 +433,13 @@ exports.getProviderServiceDetailWithFeedback = async (req, res) => {
     });
   } catch (error) {
     console.error("Get provider service details error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch service details",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch service details",
+      error: error.message,
+    });
   }
 };
-
 // Get authenticated provider's own service details
 exports.getMyServiceDetail = async (req, res) => {
   try {
@@ -347,13 +521,161 @@ exports.getMyServiceDetail = async (req, res) => {
     });
   } catch (error) {
     console.error("Get my service details error:", error);
-    res
-      .status(500)
-      .json({
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch service details",
+      error: error.message,
+    });
+  }
+};
+
+// controllers/providerController.js
+
+exports.getTopProvidersByService = async (req, res) => {
+  try {
+    const { serviceName } = req.body;
+    const { page = 1, limit = 10 } = req.query;
+
+    // Validate input
+    if (!serviceName) {
+      return res.status(400).json({
         success: false,
-        message: "Failed to fetch service details",
-        error: error.message,
+        message: "Service name is required in the request body",
       });
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    // Aggregate to get top providers for the specific service
+    const topProviders = await ServiceRequest.aggregate([
+      // Match completed service requests with reviews for the specific service
+      {
+        $match: {
+          status: "completed",
+          "review.rating": { $exists: true, $gte: 1 },
+          serviceType: serviceName,
+        },
+      },
+      // Group by provider and calculate ratings
+      {
+        $group: {
+          _id: "$provider",
+          averageRating: { $avg: "$review.rating" },
+          totalReviews: { $sum: 1 },
+          totalJobs: { $sum: 1 },
+        },
+      },
+      // Sort by average rating (descending) and total reviews (descending)
+      {
+        $sort: {
+          averageRating: -1,
+          totalReviews: -1,
+        },
+      },
+      // Skip and limit for pagination
+      {
+        $skip: skip,
+      },
+      {
+        $limit: parseInt(limit),
+      },
+      // Lookup provider details
+      {
+        $lookup: {
+          from: "serviceproviders",
+          localField: "_id",
+          foreignField: "_id",
+          as: "providerDetails",
+        },
+      },
+      // Unwind provider details
+      {
+        $unwind: "$providerDetails",
+      },
+      // Project only required fields
+      {
+        $project: {
+          _id: 1,
+          averageRating: { $round: ["$averageRating", 2] },
+          totalReviews: 1,
+          totalJobs: 1,
+          "providerDetails.businessNameRegistered": 1,
+          "providerDetails.profileImage": 1,
+          "providerDetails.businessLogo": 1,
+          "providerDetails.serviceAreas": 1,
+          "providerDetails.servicesProvided": 1,
+          "providerDetails.description": 1,
+          "providerDetails.experience": 1,
+          "providerDetails.totalJobsCompleted": 1,
+          "providerDetails.isAvailable": 1,
+          "providerDetails.isVerified": 1,
+        },
+      },
+    ]);
+
+    // Get total count for pagination
+    const totalCount = await ServiceRequest.aggregate([
+      {
+        $match: {
+          status: "completed",
+          "review.rating": { $exists: true, $gte: 1 },
+          serviceType: serviceName,
+        },
+      },
+      {
+        $group: {
+          _id: "$provider",
+        },
+      },
+      {
+        $count: "totalProviders",
+      },
+    ]);
+
+    const totalProviders =
+      totalCount.length > 0 ? totalCount[0].totalProviders : 0;
+
+    // Format the response
+    const formattedProviders = topProviders.map((provider) => ({
+      id: provider._id,
+      businessName: provider.providerDetails.businessNameRegistered,
+      profileImage: provider.providerDetails.profileImage,
+      businessLogo: provider.providerDetails.businessLogo,
+      averageRating: provider.averageRating,
+      totalReviews: provider.totalReviews,
+      totalJobsCompleted: provider.totalJobs,
+      serviceAreas: provider.providerDetails.serviceAreas,
+      servicesProvided: provider.providerDetails.servicesProvided,
+      description: provider.providerDetails.description,
+      experience: provider.providerDetails.experience,
+      isAvailable: provider.providerDetails.isAvailable,
+      isVerified: provider.providerDetails.isVerified,
+      // Include specific service details if available
+      serviceDetails: provider.providerDetails.servicesProvided.find(
+        (service) => service.name === serviceName
+      ),
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        serviceName,
+        providers: formattedProviders,
+        pagination: {
+          current: parseInt(page),
+          total: totalProviders,
+          pages: Math.ceil(totalProviders / parseInt(limit)),
+          limit: parseInt(limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get top providers by service error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch top providers",
+      error: error.message,
+    });
   }
 };
 
@@ -363,12 +685,10 @@ exports.getProviderServiceDetailsByQuery = async (req, res) => {
     const { providerId, serviceName, page = 1, limit = 10 } = req.query;
 
     if (!providerId || !serviceName) {
-      return res
-        .status(400)
-        .json({
-          success: false,
-          message: "providerId and serviceName are required",
-        });
+      return res.status(400).json({
+        success: false,
+        message: "providerId and serviceName are required",
+      });
     }
 
     // Reuse logic from the path-param handler
@@ -377,13 +697,11 @@ exports.getProviderServiceDetailsByQuery = async (req, res) => {
     return exports.getProviderServiceDetailWithFeedback(req, res);
   } catch (error) {
     console.error("Get provider service details by query error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to fetch service details",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch service details",
+      error: error.message,
+    });
   }
 };
 
@@ -412,12 +730,10 @@ exports.addProviderServiceFeedback = async (req, res) => {
       (s) => s.name === serviceName
     );
     if (!hasService) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "Service not found for this provider",
-        });
+      return res.status(404).json({
+        success: false,
+        message: "Service not found for this provider",
+      });
     }
 
     // Optional: ensure customer exists
@@ -438,22 +754,18 @@ exports.addProviderServiceFeedback = async (req, res) => {
 
     await doc.populate("customer", "firstName lastName profileImage");
 
-    res
-      .status(201)
-      .json({
-        success: true,
-        message: "Feedback submitted",
-        data: { feedback: doc },
-      });
+    res.status(201).json({
+      success: true,
+      message: "Feedback submitted",
+      data: { feedback: doc },
+    });
   } catch (error) {
     console.error("Add provider service feedback error:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Failed to submit feedback",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Failed to submit feedback",
+      error: error.message,
+    });
   }
 };
 

@@ -284,15 +284,30 @@ async function handleSendQuickChat(socket, data) {
     }
 
     console.log("🔍 Looking for quick chat:", quickChatId);
-    // Get quick chat content - verify it belongs to the user
+
+    // Get quick chat content - allow admin quick chats for both customers and providers
     const quickChat = await QuickChat.findOne({
       _id: quickChatId,
-      createdBy: socket.userId,
-      createdByRole: socket.userRole,
+      isActive: true,
+      $or: [
+        // User's own quick chats
+        {
+          createdBy: socket.userId,
+          createdByRole: socket.userRole,
+        },
+        // Admin quick chats - accessible to both customers and providers
+        {
+          createdByRole: "admin",
+        },
+        // Quick chats from same role (customers can use other customers' quick chats, providers can use other providers')
+        {
+          createdByRole: socket.userRole,
+        },
+      ],
     });
 
     if (!quickChat) {
-      console.log("❌ Quick chat not found or doesn't belong to user");
+      console.log("❌ Quick chat not found or user doesn't have permission");
       socket.emit("message", {
         type: "error",
         data: { message: "Quick chat not found or access denied" },
@@ -300,7 +315,12 @@ async function handleSendQuickChat(socket, data) {
       return;
     }
 
-    console.log("✅ Quick chat found:", quickChat.content);
+    console.log("✅ Quick chat found:", {
+      content: quickChat.content,
+      createdByRole: quickChat.createdByRole,
+      createdBy: quickChat.createdBy,
+      isAdminCreated: quickChat.createdByRole === "admin",
+    });
 
     // Get or create conversation
     console.log("🔄 Getting or creating conversation...");
@@ -329,12 +349,20 @@ async function handleSendQuickChat(socket, data) {
       content: quickChat.content,
       quickChatId: quickChatId,
       timestamp: new Date(),
+      isQuickChat: true,
+      quickChatDetails: {
+        id: quickChat._id,
+        isAdminCreated: quickChat.createdByRole === "admin",
+        originalCreator: quickChat.createdBy,
+        originalCreatorRole: quickChat.createdByRole,
+      },
     };
 
     console.log("📨 Creating message:", {
       senderId: socket.userId,
       senderRole: socket.userRole,
       content: quickChat.content,
+      isAdminQuickChat: quickChat.createdByRole === "admin",
     });
 
     // Add message to conversation
@@ -356,7 +384,7 @@ async function handleSendQuickChat(socket, data) {
       updatedConversation.messages.length
     );
 
-    // Increment quick chat usage count
+    // Increment quick chat usage count (only if not admin's own quick chat)
     console.log("📈 Incrementing quick chat usage...");
     quickChat.usageCount += 1;
     await quickChat.save();
@@ -367,7 +395,8 @@ async function handleSendQuickChat(socket, data) {
       "📤 Emitting new_message to room:",
       `conversation_${conversation._id}`
     );
-    io.to(`conversation_${conversation._id}`).emit("message", {
+
+    const messageData = {
       type: "new_message",
       data: {
         conversationId: conversation._id,
@@ -376,8 +405,15 @@ async function handleSendQuickChat(socket, data) {
           id: socket.userId,
           role: socket.userRole,
         },
+        quickChatInfo: {
+          id: quickChat._id,
+          isAdminCreated: quickChat.createdByRole === "admin",
+          usageCount: quickChat.usageCount,
+        },
       },
-    });
+    };
+
+    io.to(`conversation_${conversation._id}`).emit("message", messageData);
 
     // Notify the other user(s)
     if (conversation.providerId) {
@@ -392,6 +428,8 @@ async function handleSendQuickChat(socket, data) {
             conversationId: conversation._id,
             lastMessage: quickChat.content,
             lastMessageAt: new Date(),
+            hasNewMessage: true,
+            quickChatUsed: true,
           },
         });
       }
@@ -406,6 +444,8 @@ async function handleSendQuickChat(socket, data) {
             conversationId: conversation._id,
             lastMessage: quickChat.content,
             lastMessageAt: new Date(),
+            hasNewMessage: true,
+            quickChatUsed: true,
           },
         });
       }
@@ -419,6 +459,11 @@ async function handleSendQuickChat(socket, data) {
         conversationId: conversation._id,
         message: "Message sent successfully",
         savedMessage: message,
+        quickChatInfo: {
+          id: quickChat._id,
+          isAdminCreated: quickChat.createdByRole === "admin",
+          usageCount: quickChat.usageCount,
+        },
       },
     });
 

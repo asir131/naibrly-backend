@@ -15,6 +15,8 @@ const {
   updateServiceArea,
   removeServiceArea,
   getProvidersByServiceArea,
+  getTopProvidersByService,
+  getProviderServiceDetailsWithReviews,
 } = require("../controllers/providerController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -30,7 +32,7 @@ router.get(
   "/:providerId/services/:serviceName",
   getProviderServiceDetailWithFeedback
 );
-
+router.post("/top-by-service", getTopProvidersByService);
 // Service routes - Authenticated Provider (using bearer token)
 router.get("/services/my-services", auth, authorize("provider"), getMyServices);
 router.get(
@@ -39,6 +41,8 @@ router.get(
   authorize("provider"),
   getMyServiceDetail
 );
+
+router.post("/service-details", getProviderServiceDetailsWithReviews);
 
 // Public query endpoint
 router.get("/service-details", getProviderServiceDetailsByQuery);

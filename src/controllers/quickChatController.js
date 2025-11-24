@@ -1,14 +1,21 @@
 const QuickChat = require("../models/QuickChat");
 
-// Get all quick chats for the current user
+// Get all quick chats for the current user (including admin-created)
 exports.getQuickChats = async (req, res) => {
   try {
-    // Get quick chats created by this user only
-    const quickChats = await QuickChat.find({
+    const userQuickChats = {
       createdBy: req.user._id,
       createdByRole: req.user.role,
       isActive: true,
-    }).sort({ usageCount: -1, createdAt: -1 });
+    };
+    const adminQuickChats = {
+      createdByRole: 'admin',
+      isActive: true,
+    };
+
+    const quickChats = await QuickChat.find({
+      $or: [userQuickChats, adminQuickChats],
+    }).sort({ createdByRole: 1, usageCount: -1, createdAt: -1 });
 
     res.json({
       success: true,
@@ -148,6 +155,139 @@ exports.updateQuickChat = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to update quick chat",
+      error: error.message,
+    });
+  }
+};
+
+// Get all admin-created quick chats
+exports.getAdminQuickChats = async (req, res) => {
+  try {
+    const quickChats = await QuickChat.find({
+      createdByRole: 'admin',
+    }).sort({ createdAt: -1 });
+
+    res.json({
+      success: true,
+      data: { quickChats },
+    });
+  } catch (error) {
+    console.error("Get admin quick chats error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch admin quick chats",
+      error: error.message,
+    });
+  }
+};
+
+// Create a new quick chat as an admin
+exports.createAdminQuickChat = async (req, res) => {
+  try {
+    const { content } = req.body;
+
+    if (!content || content.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Quick chat content is required",
+      });
+    }
+
+    const quickChat = new QuickChat({
+      content: content.trim(),
+      createdBy: req.user._id,
+      createdByRole: 'admin',
+    });
+
+    await quickChat.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Admin quick chat created successfully",
+      data: { quickChat },
+    });
+  } catch (error) {
+    console.error("Create admin quick chat error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create admin quick chat",
+      error: error.message,
+    });
+  }
+};
+
+// Update an admin-created quick chat
+exports.updateAdminQuickChat = async (req, res) => {
+  try {
+    const { quickChatId } = req.params;
+    const { content } = req.body;
+
+    if (!content || content.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        message: "Quick chat content is required",
+      });
+    }
+
+    const quickChat = await QuickChat.findOneAndUpdate(
+      {
+        _id: quickChatId,
+        createdByRole: 'admin',
+      },
+      {
+        content: content.trim(),
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!quickChat) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin quick chat not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Admin quick chat updated successfully",
+      data: { quickChat },
+    });
+  } catch (error) {
+    console.error("Update admin quick chat error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update admin quick chat",
+      error: error.message,
+    });
+  }
+};
+
+// Delete an admin-created quick chat
+exports.deleteAdminQuickChat = async (req, res) => {
+  try {
+    const { quickChatId } = req.params;
+
+    const quickChat = await QuickChat.findOneAndDelete({
+      _id: quickChatId,
+      createdByRole: 'admin',
+    });
+
+    if (!quickChat) {
+      return res.status(404).json({
+        success: false,
+        message: "Admin quick chat not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Admin quick chat deleted successfully",
+    });
+  } catch (error) {
+    console.error("Delete admin quick chat error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete admin quick chat",
       error: error.message,
     });
   }
