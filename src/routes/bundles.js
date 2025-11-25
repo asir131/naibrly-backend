@@ -63,5 +63,11 @@ router.get(
   authorize("customer"),
   bundleController.joinBundleViaShareToken
 );
+router.post(
+  "/:bundleId/review",
+  auth,
+  authorize("customer"),
+  bundleController.addBundleReview
+);
 
 module.exports = router;

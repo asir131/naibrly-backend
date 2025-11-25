@@ -4,6 +4,7 @@ const Customer = require("../models/Customer");
 const ServiceProvider = require("../models/ServiceProvider");
 const Service = require("../models/Service");
 const Conversation = require("../models/Conversation");
+const { updateProviderRating } = require("./serviceRequestController");
 const crypto = require("crypto");
 const QRCode = require("qrcode");
 const { calculateBundleCommission } = require("./commissionController");
@@ -1851,3 +1852,94 @@ exports.joinBundleViaShareToken = async (req, res) => {
 };
 
 exports.initializeBundleSettings = initializeBundleSettings;
+
+// Add review to bundle (applies rating to all services and provider average)
+exports.addBundleReview = async (req, res) => {
+  try {
+    const { bundleId } = req.params;
+    const { rating, comment } = req.body;
+    const customerId = req.user._id;
+
+    if (!rating || rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: "Rating must be between 1 and 5",
+      });
+    }
+
+    const bundle = await Bundle.findById(bundleId)
+      .populate("creator", "firstName lastName")
+      .populate("participants.customer", "firstName lastName")
+      .populate("provider", "businessNameRegistered");
+
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: "Bundle not found",
+      });
+    }
+
+    if (!bundle.provider) {
+      return res.status(400).json({
+        success: false,
+        message: "Bundle has no assigned provider to review",
+      });
+    }
+
+    // Check if customer is creator or participant
+    const isCreator = bundle.creator?._id?.toString() === customerId.toString();
+    const isParticipant = bundle.participants.some(
+      (p) => p.customer && p.customer._id.toString() === customerId.toString()
+    );
+
+    if (!isCreator && !isParticipant) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not part of this bundle",
+      });
+    }
+
+    // Check if already reviewed by this customer
+    const alreadyReviewed = bundle.reviews.some(
+      (rev) => rev.customer.toString() === customerId.toString()
+    );
+
+    if (alreadyReviewed) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already reviewed this bundle",
+      });
+    }
+
+    bundle.reviews.push({
+      customer: customerId,
+      rating,
+      comment,
+      createdAt: new Date(),
+    });
+
+    await bundle.save();
+
+    // Update provider rating (includes bundle reviews + services)
+    await updateProviderRating(bundle.provider._id);
+
+    res.json({
+      success: true,
+      message: "Bundle review submitted successfully",
+      data: {
+        bundle: {
+          id: bundle._id,
+          reviews: bundle.reviews,
+          provider: bundle.provider,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Add bundle review error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to submit bundle review",
+      error: error.message,
+    });
+  }
+};

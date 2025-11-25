@@ -337,6 +337,10 @@ exports.createServiceRequest = async (req, res) => {
     // Create service request with all requested services
     const serviceRequest = new ServiceRequest({
       customer: req.user._id,
+      customerName: {
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+      },
       provider: providerId,
       serviceType: actualServiceName, // Main service
       service: actualServiceDoc?._id, // Reference to main Service document
@@ -366,6 +370,9 @@ exports.createServiceRequest = async (req, res) => {
     });
 
     await serviceRequest.save();
+
+    // Populate customer basic info for response
+    await serviceRequest.populate("customer", "firstName lastName email");
 
     // Populate for response
     await serviceRequest.populate(
@@ -1524,27 +1531,44 @@ exports.testProviderServices = async (req, res) => {
   }
 };
 
-// Helper function to update provider rating
+// Helper function to update provider rating (includes service requests + bundle reviews)
 const updateProviderRating = async (providerId) => {
   try {
-    const reviews = await ServiceRequest.find({
+    const serviceReviews = await ServiceRequest.find({
       provider: providerId,
       "review.rating": { $exists: true },
+    }).select("review");
+
+    const bundleReviews = await Bundle.find({
+      provider: providerId,
+      "reviews.rating": { $exists: true },
+    }).select("reviews");
+
+    const serviceRatings = serviceReviews
+      .filter((r) => r.review?.rating)
+      .map((r) => r.review.rating);
+    const bundleRatings = [];
+    bundleReviews.forEach((b) => {
+      (b.reviews || []).forEach((rev) => {
+        if (rev.rating) bundleRatings.push(rev.rating);
+      });
     });
 
-    if (reviews.length > 0) {
-      const totalRating = reviews.reduce(
-        (sum, request) => sum + request.review.rating,
-        0
-      );
-      const averageRating = totalRating / reviews.length;
-
-      await ServiceProvider.findByIdAndUpdate(providerId, {
-        rating: Math.round(averageRating * 10) / 10,
-        totalReviews: reviews.length,
-      });
+    const allRatings = [...serviceRatings, ...bundleRatings];
+    if (allRatings.length === 0) {
+      return;
     }
+
+    const totalRating = allRatings.reduce((sum, r) => sum + r, 0);
+    const averageRating = totalRating / allRatings.length;
+
+    await ServiceProvider.findByIdAndUpdate(providerId, {
+      rating: Math.round(averageRating * 10) / 10,
+      totalReviews: allRatings.length,
+    });
   } catch (error) {
     console.error("Update provider rating error:", error);
   }
 };
+
+exports.updateProviderRating = updateProviderRating;

@@ -7,6 +7,10 @@ const serviceRequestSchema = new mongoose.Schema(
       ref: "Customer",
       required: true,
     },
+    customerName: {
+      firstName: { type: String, default: "" },
+      lastName: { type: String, default: "" },
+    },
     provider: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ServiceProvider",
