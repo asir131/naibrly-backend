@@ -431,7 +431,7 @@ const registerProvider = async (req, res) => {
       hourlyRate: averageHourlyRate,
       businessServiceDays,
       businessHours,
-      isApproved: process.env.AUTO_APPROVE_PROVIDERS === "true" || false,
+      isApproved: true,
       isVerified: false,
     });
 
@@ -732,7 +732,8 @@ const logout = async (req, res) => {
   try {
     res.json({
       success: true,
-      message: "Logged out successfully. Please remove your token on the client.",
+      message:
+        "Logged out successfully. Please remove your token on the client.",
     });
   } catch (error) {
     res.status(500).json({
