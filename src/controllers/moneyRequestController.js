@@ -453,6 +453,175 @@ const getCustomerMoneyRequests = async (req, res) => {
   }
 };
 
+// Customer accepts money request (no body needed; sets status to accepted)
+const acceptMoneyRequestWithAmount = async (req, res) => {
+  try {
+    const { moneyRequestId } = req.params;
+    const customerId = req.user._id;
+
+    const moneyRequest = await MoneyRequest.findOne({
+      _id: moneyRequestId,
+      customer: customerId,
+      status: "pending",
+    });
+
+    if (!moneyRequest) {
+      return res.status(404).json({
+        success: false,
+        message: "Pending money request not found or you are not the customer",
+      });
+    }
+
+    // Simply mark as accepted, keep existing amounts
+    moneyRequest.status = "accepted";
+
+    // Recalculate commission from existing totalAmount
+    const commission = await calculateServiceCommission(
+      moneyRequest.totalAmount || moneyRequest.amount
+    );
+    moneyRequest.commission.amount = commission.commissionAmount;
+    moneyRequest.commission.providerAmount = commission.providerAmount;
+
+    moneyRequest._statusChangedBy = customerId;
+    moneyRequest._statusChangedByRole = "customer";
+
+    moneyRequest.status = "accepted";
+
+    await moneyRequest.save();
+
+    await moneyRequest.populate([
+      { path: "customer", select: "firstName lastName email" },
+      { path: "provider", select: "businessNameRegistered email" },
+    ]);
+
+    res.json({
+      success: true,
+      message: "Money request accepted",
+      data: {
+        moneyRequest,
+      },
+    });
+  } catch (error) {
+    console.error("Accept money request with amount error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to accept money request",
+      error: error.message,
+    });
+  }
+};
+
+// Customer sets amount + tip and initiates Stripe checkout
+const setAmountAndPay = async (req, res) => {
+  try {
+    const { moneyRequestId } = req.params;
+    const { amount, tipAmount } = req.body;
+    const customerId = req.user._id;
+
+    if (amount === undefined || Number(amount) <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Amount must be greater than 0",
+      });
+    }
+
+    if (tipAmount !== undefined && Number(tipAmount) < 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Tip amount cannot be negative",
+      });
+    }
+
+    const moneyRequest = await MoneyRequest.findOne({
+      _id: moneyRequestId,
+      customer: customerId,
+      status: { $in: ["pending", "accepted"] },
+    }).populate("customer provider");
+
+    if (!moneyRequest) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "Pending/accepted money request not found or you are not the customer",
+      });
+    }
+
+    moneyRequest.amount = Number(amount);
+    moneyRequest.tipAmount = tipAmount ? Number(tipAmount) : 0;
+    moneyRequest.totalAmount = moneyRequest.amount + moneyRequest.tipAmount;
+    moneyRequest.status = "accepted";
+
+    const commission = await calculateServiceCommission(
+      moneyRequest.totalAmount
+    );
+    moneyRequest.commission.amount = commission.commissionAmount;
+    moneyRequest.commission.providerAmount = commission.providerAmount;
+    moneyRequest._statusChangedBy = customerId;
+    moneyRequest._statusChangedByRole = "customer";
+
+    // Create Stripe Checkout Session
+    const session = await stripe.checkout.sessions.create({
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: `Payment for ${moneyRequest.description || "Service"}`,
+              description: `Payment request from ${moneyRequest.provider.businessNameRegistered}`,
+            },
+            unit_amount: Math.round(moneyRequest.totalAmount * 100),
+          },
+          quantity: 1,
+        },
+      ],
+      mode: "payment",
+      success_url: `${
+        process.env.SERVER_URL || "http://localhost:5000"
+      }/api/money-requests/${moneyRequestId}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${
+        process.env.SERVER_URL || "http://localhost:5000"
+      }/api/money-requests/${moneyRequestId}/payment-canceled`,
+      customer_email: moneyRequest.customer.email,
+      metadata: {
+        moneyRequestId: moneyRequestId.toString(),
+        customerId: customerId.toString(),
+        providerId: moneyRequest.provider._id.toString(),
+      },
+    });
+
+    moneyRequest.paymentDetails = {
+      checkoutSessionId: session.id,
+      sessionCreatedAt: new Date(),
+      status: "checkout_pending",
+    };
+
+    await moneyRequest.save();
+
+    res.json({
+      success: true,
+      message: "Amount set and Stripe Checkout session created",
+      data: {
+        sessionId: session.id,
+        sessionUrl: session.url,
+        checkoutUrl: session.url,
+        moneyRequest: {
+          id: moneyRequest._id,
+          amount: moneyRequest.totalAmount,
+          description: moneyRequest.description,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Set amount and pay error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to set amount and create payment session",
+      error: error.message,
+    });
+  }
+};
+
 // Payment history for provider (paid money requests)
 const getProviderPaymentHistory = async (req, res) => {
   try {
@@ -530,6 +699,48 @@ const getCustomerPaymentHistory = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch payment history",
+      error: error.message,
+    });
+  }
+};
+
+// Admin: list all transactions (money requests)
+const getAdminTransactions = async (req, res) => {
+  try {
+    const { status, page = 1, limit = 20 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const filter = {};
+    if (status) filter.status = status;
+
+    const [moneyRequests, total] = await Promise.all([
+      MoneyRequest.find(filter)
+        .populate("provider", "businessNameRegistered email")
+        .populate("customer", "firstName lastName email")
+        .populate("serviceRequest", "serviceType scheduledDate")
+        .populate("bundle", "title category finalPrice")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      MoneyRequest.countDocuments(filter),
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        transactions: moneyRequests,
+        pagination: {
+          current: parseInt(page),
+          total,
+          pages: Math.ceil(total / parseInt(limit)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get admin transactions error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch transactions",
       error: error.message,
     });
   }
@@ -1209,8 +1420,11 @@ module.exports = {
   debugWebhook,
   getProviderMoneyRequests,
   getCustomerMoneyRequests,
+  acceptMoneyRequestWithAmount,
+  setAmountAndPay,
   getProviderPaymentHistory,
   getCustomerPaymentHistory,
+  getAdminTransactions,
   getMoneyRequest,
   acceptMoneyRequest,
   cancelMoneyRequest,

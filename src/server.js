@@ -134,6 +134,9 @@ app.use("/api/bundle-settings", require("./routes/bundleSettings"));
 // Provider routes
 app.use("/api/providers", require("./routes/providers"));
 
+// Withdrawal routes
+app.use("/api/withdrawals", require("./routes/withdrawals"));
+
 // Quick chat routes
 app.use("/api/quick-chats", require("./routes/quickChats"));
 

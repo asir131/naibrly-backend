@@ -20,6 +20,7 @@ const {
   getAllProvidersInfo,
   deleteMyService,
   addMyService,
+  getMyBalance,
 } = require("../controllers/providerController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -56,6 +57,7 @@ router.delete(
   authorize("provider"),
   deleteMyService
 );
+router.get("/balance/my", auth, authorize("provider"), getMyBalance);
 
 router.post("/service-details", getProviderServiceDetailsWithReviews);
 

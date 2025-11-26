@@ -137,6 +137,7 @@ const handleCheckoutSessionCompleted = async (session) => {
           {
             $inc: {
               totalEarnings: moneyRequest.commission?.providerAmount || 0,
+              availableBalance: moneyRequest.commission?.providerAmount || 0,
               completedRequests: 1,
             },
           }

@@ -162,6 +162,17 @@ const serviceProviderSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    // Balances for payouts
+    availableBalance: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    pendingPayout: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     totalEarnings: {
       type: Number,
       default: 0,

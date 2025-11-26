@@ -736,6 +736,36 @@ exports.deleteMyService = async (req, res) => {
   }
 };
 
+// Provider: get balances
+exports.getMyBalance = async (req, res) => {
+  try {
+    const provider = await ServiceProvider.findById(req.user._id).select(
+      "availableBalance pendingPayout totalEarnings pendingEarnings"
+    );
+
+    if (!provider) {
+      return res.status(404).json({ success: false, message: "Provider not found" });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        availableBalance: provider.availableBalance || 0,
+        pendingPayout: provider.pendingPayout || 0,
+        totalEarnings: provider.totalEarnings || 0,
+        pendingEarnings: provider.pendingEarnings || 0,
+      },
+    });
+  } catch (error) {
+    console.error("Get provider balance error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch balance",
+      error: error.message,
+    });
+  }
+};
+
 // Public: get all providers with key profile fields
 exports.getAllProvidersInfo = async (_req, res) => {
   try {

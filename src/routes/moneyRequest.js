@@ -8,8 +8,11 @@ const {
   getCustomerMoneyRequests,
   getProviderPaymentHistory,
   getCustomerPaymentHistory,
+  getAdminTransactions,
   getMoneyRequest,
   acceptMoneyRequest,
+  acceptMoneyRequestWithAmount,
+  setAmountAndPay,
   cancelMoneyRequest,
   processPayment,
   completePayment,
@@ -41,6 +44,18 @@ router.get(
   auth,
   authorize("customer"),
   getCustomerPaymentHistory
+);
+router.patch(
+  "/:moneyRequestId/accept-with-amount",
+  auth,
+  authorize("customer"),
+  acceptMoneyRequestWithAmount
+);
+router.post(
+  "/:moneyRequestId/set-amount-and-pay",
+  auth,
+  authorize("customer"),
+  setAmountAndPay
 );
 router.patch(
   "/:moneyRequestId/accept",
@@ -86,6 +101,7 @@ router.patch(
   authorize("admin"),
   resolveDispute
 );
+router.get("/admin/transactions", auth, authorize("admin"), getAdminTransactions);
 
 router.get(
   "/:moneyRequestId/status",
