@@ -1023,6 +1023,97 @@ exports.getMyBalance = async (req, res) => {
   }
 };
 
+// Provider analytics: today's and this month's orders/earnings
+exports.getMyAnalytics = async (req, res) => {
+  try {
+    const providerId = req.user._id;
+    const now = new Date();
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const baseMatch = {
+      provider: providerId,
+      status: "completed",
+    };
+
+    const [todayOrders, monthOrders, todayEarningsAgg, monthEarningsAgg] =
+      await Promise.all([
+        ServiceRequest.countDocuments({
+          ...baseMatch,
+          completedAt: { $gte: startOfToday },
+        }),
+        ServiceRequest.countDocuments({
+          ...baseMatch,
+          completedAt: { $gte: startOfMonth },
+        }),
+        ServiceRequest.aggregate([
+          {
+            $match: {
+              ...baseMatch,
+              completedAt: { $gte: startOfToday },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              earnings: {
+                $sum: {
+                  $ifNull: ["$commission.providerAmount", "$price"],
+                },
+              },
+            },
+          },
+        ]),
+        ServiceRequest.aggregate([
+          {
+            $match: {
+              ...baseMatch,
+              completedAt: { $gte: startOfMonth },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              earnings: {
+                $sum: {
+                  $ifNull: ["$commission.providerAmount", "$price"],
+                },
+              },
+            },
+          },
+        ]),
+      ]);
+
+    const todayEarnings =
+      todayEarningsAgg.length > 0 ? todayEarningsAgg[0].earnings : 0;
+    const monthEarnings =
+      monthEarningsAgg.length > 0 ? monthEarningsAgg[0].earnings : 0;
+
+    res.json({
+      success: true,
+      data: {
+        today: {
+          orders: todayOrders,
+          earnings: todayEarnings,
+        },
+        month: {
+          orders: monthOrders,
+          earnings: monthEarnings,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get provider analytics error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch analytics",
+      error: error.message,
+    });
+  }
+};
+
 // Public: get all providers with key profile fields
 exports.getAllProvidersInfo = async (_req, res) => {
   try {

@@ -379,6 +379,15 @@ exports.reviewVerification = async (req, res) => {
     // Update provider verification status
     if (verification.provider) {
       verification.provider.isVerified = status === "approved";
+      // Update provider name from verification data upon approval
+      if (status === "approved") {
+        if (verification.firstName) {
+          verification.provider.firstName = verification.firstName;
+        }
+        if (verification.lastName) {
+          verification.provider.lastName = verification.lastName;
+        }
+      }
       await verification.provider.save();
 
       // Sync payout verification status with admin decision if payout info exists

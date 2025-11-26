@@ -23,6 +23,7 @@ const {
   deleteMyService,
   addMyService,
   getMyBalance,
+  getMyAnalytics,
 } = require("../controllers/providerController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -42,6 +43,7 @@ router.get(
 
 // Authenticated provider services (no providerId required)
 router.get("/services", auth, authorize("provider"), getProviderServices);
+router.get("/analytics/my", auth, authorize("provider"), getMyAnalytics);
 
 // Service routes - Public (using providerId)
 router.get("/:providerId/reviews", getProviderReviews);
