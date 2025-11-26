@@ -2,6 +2,7 @@ const ServiceProvider = require("../models/ServiceProvider");
 const ProviderServiceFeedback = require("../models/ProviderServiceFeedback");
 const Customer = require("../models/Customer");
 const mongoose = require("mongoose");
+const ServiceRequest = require("../models/ServiceRequest");
 // Update provider's bundle capacity
 exports.updateProviderCapacity = async (req, res) => {
   try {
@@ -164,6 +165,256 @@ exports.getMyServices = async (req, res) => {
 };
 
 // controllers/providerController.js
+
+// Public: get all reviews for a provider from completed service requests
+exports.getProviderReviews = async (req, res) => {
+  try {
+    const { providerId } = req.params;
+    const { page = 1, limit = 10 } = req.query;
+
+    if (!providerId || !mongoose.Types.ObjectId.isValid(providerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid providerId is required",
+      });
+    }
+
+    const provider = await ServiceProvider.findById(providerId).select(
+      "businessNameRegistered businessLogo profileImage rating totalReviews"
+    );
+
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const reviewQuery = {
+      provider: providerId,
+      status: "completed",
+      "review.rating": { $exists: true },
+    };
+
+    const [reviews, totalReviews, ratingStats] = await Promise.all([
+      ServiceRequest.find(reviewQuery)
+        .select("review customer serviceType scheduledDate")
+        .populate("customer", "firstName lastName profileImage")
+        .sort({ "review.createdAt": -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      ServiceRequest.countDocuments(reviewQuery),
+      ServiceRequest.aggregate([
+        {
+          $match: {
+            provider: new mongoose.Types.ObjectId(providerId),
+            status: "completed",
+            "review.rating": { $exists: true },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            averageRating: { $avg: "$review.rating" },
+            ratings: { $push: "$review.rating" },
+          },
+        },
+      ]),
+    ]);
+
+    const ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    if (ratingStats.length > 0 && Array.isArray(ratingStats[0].ratings)) {
+      ratingStats[0].ratings.forEach((rating) => {
+        const rounded = Math.round(rating);
+        if (ratingDistribution[rounded] !== undefined) {
+          ratingDistribution[rounded]++;
+        }
+      });
+    }
+
+    const averageRating =
+      ratingStats.length > 0 && ratingStats[0].averageRating
+        ? Number(ratingStats[0].averageRating.toFixed(2))
+        : 0;
+
+    const formattedReviews = reviews.map((review) => ({
+      id: review._id,
+      rating: review.review.rating,
+      comment: review.review.comment,
+      createdAt: review.review.createdAt,
+      serviceName: review.serviceType,
+      serviceDate: review.scheduledDate,
+      customer: {
+        id: review.customer?._id,
+        firstName: review.customer?.firstName,
+        lastName: review.customer?.lastName,
+        profileImage: review.customer?.profileImage,
+      },
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        provider: {
+          id: provider._id,
+          businessName: provider.businessNameRegistered,
+          businessLogo: provider.businessLogo,
+          profileImage: provider.profileImage,
+          rating: provider.rating,
+          totalReviews: provider.totalReviews,
+        },
+        reviews: {
+          statistics: {
+            averageRating,
+            totalReviews,
+            ratingDistribution,
+          },
+          list: formattedReviews,
+          pagination: {
+            current: parseInt(page),
+            total: totalReviews,
+            pages: Math.ceil(totalReviews / parseInt(limit)),
+            limit: parseInt(limit),
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get provider reviews error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch provider reviews",
+      error: error.message,
+    });
+  }
+};
+
+// Authenticated provider: get all of their reviews from completed service requests
+exports.getMyReviews = async (req, res) => {
+  try {
+    const providerId = req.user?._id;
+    const { page = 1, limit = 10 } = req.query;
+
+    if (!providerId || !mongoose.Types.ObjectId.isValid(providerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid providerId is required",
+      });
+    }
+
+    const provider = await ServiceProvider.findById(providerId).select(
+      "businessNameRegistered businessLogo profileImage rating totalReviews"
+    );
+
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const reviewQuery = {
+      provider: providerId,
+      status: "completed",
+      "review.rating": { $exists: true },
+    };
+
+    const [reviews, totalReviews, ratingStats] = await Promise.all([
+      ServiceRequest.find(reviewQuery)
+        .select("review customer serviceType scheduledDate")
+        .populate("customer", "firstName lastName profileImage")
+        .sort({ "review.createdAt": -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      ServiceRequest.countDocuments(reviewQuery),
+      ServiceRequest.aggregate([
+        {
+          $match: {
+            provider: new mongoose.Types.ObjectId(providerId),
+            status: "completed",
+            "review.rating": { $exists: true },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            averageRating: { $avg: "$review.rating" },
+            ratings: { $push: "$review.rating" },
+          },
+        },
+      ]),
+    ]);
+
+    const ratingDistribution = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+    if (ratingStats.length > 0 && Array.isArray(ratingStats[0].ratings)) {
+      ratingStats[0].ratings.forEach((rating) => {
+        const rounded = Math.round(rating);
+        if (ratingDistribution[rounded] !== undefined) {
+          ratingDistribution[rounded]++;
+        }
+      });
+    }
+
+    const averageRating =
+      ratingStats.length > 0 && ratingStats[0].averageRating
+        ? Number(ratingStats[0].averageRating.toFixed(2))
+        : 0;
+
+    const formattedReviews = reviews.map((review) => ({
+      id: review._id,
+      rating: review.review.rating,
+      comment: review.review.comment,
+      createdAt: review.review.createdAt,
+      serviceName: review.serviceType,
+      serviceDate: review.scheduledDate,
+      customer: {
+        id: review.customer?._id,
+        firstName: review.customer?.firstName,
+        lastName: review.customer?.lastName,
+        profileImage: review.customer?.profileImage,
+      },
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        provider: {
+          id: provider._id,
+          businessName: provider.businessNameRegistered,
+          businessLogo: provider.businessLogo,
+          profileImage: provider.profileImage,
+          rating: provider.rating,
+          totalReviews: provider.totalReviews,
+        },
+        reviews: {
+          statistics: {
+            averageRating,
+            totalReviews,
+            ratingDistribution,
+          },
+          list: formattedReviews,
+          pagination: {
+            current: parseInt(page),
+            total: totalReviews,
+            pages: Math.ceil(totalReviews / parseInt(limit)),
+            limit: parseInt(limit),
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get provider reviews (self) error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch provider reviews",
+      error: error.message,
+    });
+  }
+};
 
 exports.getProviderServiceDetailsWithReviews = async (req, res) => {
   try {
@@ -334,7 +585,6 @@ exports.getProviderServiceDetailsWithReviews = async (req, res) => {
   }
 };
 
-const ServiceRequest = require("../models/ServiceRequest");
 // Public: get a specific service, other services, and feedback (by providerId)
 exports.getProviderServiceDetailWithFeedback = async (req, res) => {
   try {

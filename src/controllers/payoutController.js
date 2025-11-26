@@ -1,6 +1,7 @@
 const PayoutInformation = require("../models/PayoutInformation");
 const ServiceProvider = require("../models/ServiceProvider");
 const Bank = require("../models/Bank");
+const Verification = require("../models/Verification");
 
 // Save or update payout information
 exports.savePayoutInformation = async (req, res) => {
@@ -8,7 +9,6 @@ exports.savePayoutInformation = async (req, res) => {
     const {
       accountHolderName,
       bankName,
-      bankCode,
       accountNumber,
       routingNumber,
       accountType,
@@ -20,16 +20,19 @@ exports.savePayoutInformation = async (req, res) => {
     if (
       !accountHolderName ||
       !bankName ||
-      !bankCode ||
       !accountNumber ||
-      !routingNumber ||
-      !accountType
+      !routingNumber
     ) {
       return res.status(400).json({
         success: false,
-        message: "All fields are required",
+        message:
+          "accountHolderName, bankName, accountNumber, and routingNumber are required",
       });
     }
+    const resolvedAccountType =
+      accountType && ["checking", "savings"].includes(accountType)
+        ? accountType
+        : "checking";
 
     // Validate routing number format (9 digits)
     const routingNumberRegex = /^\d{9}$/;
@@ -44,16 +47,27 @@ exports.savePayoutInformation = async (req, res) => {
     if (accountNumber.length < 4) {
       return res.status(400).json({
         success: false,
-        message: "Account number must be at least 4 digits",
-      });
-    }
+      message: "Account number must be at least 4 digits",
+    });
+  }
 
-    // Verify bank exists
-    const bank = await Bank.findOne({ code: bankCode, isActive: true });
+    // Verify bank exists by name (predefined list)
+    const bank = await Bank.findOne({
+      name: { $regex: new RegExp(`^${bankName}$`, "i") },
+      isActive: true,
+    });
     if (!bank) {
       return res.status(400).json({
         success: false,
         message: "Invalid bank selected",
+      });
+    }
+
+    // Ensure provided routing matches predefined bank routing number
+    if (bank.routingNumber !== routingNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Routing number does not match the selected bank",
       });
     }
 
@@ -75,10 +89,10 @@ exports.savePayoutInformation = async (req, res) => {
       {
         accountHolderName: accountHolderName.trim(),
         bankName: bankName.trim(),
-        bankCode: bankCode,
-        accountNumber: accountNumber, // In production, encrypt this field
-        routingNumber: routingNumber,
-        accountType: accountType,
+        bankCode: bank.code,
+      accountNumber: accountNumber, // In production, encrypt this field
+      routingNumber: routingNumber,
+        accountType: resolvedAccountType,
         lastFourDigits: lastFourDigits,
         isVerified: false,
         verificationStatus: "pending",
@@ -123,6 +137,145 @@ exports.savePayoutInformation = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to save payout information",
+      error: error.message,
+    });
+  }
+};
+
+// Update payout information (requires provider verification complete)
+exports.updatePayoutInformation = async (req, res) => {
+  try {
+    const {
+      accountHolderName,
+      bankName,
+      accountNumber,
+      routingNumber,
+      accountType,
+    } = req.body;
+
+    const providerId = req.user._id;
+
+    // Ensure provider is verified before allowing edits
+    const provider = await ServiceProvider.findById(providerId);
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    const requiredMissing = [];
+    if (!accountHolderName) requiredMissing.push("accountHolderName");
+    if (!bankName) requiredMissing.push("bankName");
+    if (!accountNumber) requiredMissing.push("accountNumber");
+    if (!routingNumber) requiredMissing.push("routingNumber");
+    if (requiredMissing.length) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields",
+        missing: requiredMissing,
+      });
+    }
+
+    const routingNumberRegex = /^\d{9}$/;
+    if (!routingNumberRegex.test(routingNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "Routing number must be exactly 9 digits",
+      });
+    }
+
+    if (accountNumber.length < 4) {
+      return res.status(400).json({
+        success: false,
+        message: "Account number must be at least 4 digits",
+      });
+    }
+
+    const bank = await Bank.findOne({
+      name: { $regex: new RegExp(`^${bankName}$`, "i") },
+      isActive: true,
+    });
+    if (!bank) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid bank selected",
+      });
+    }
+    if (bank.routingNumber !== routingNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Routing number does not match the selected bank",
+      });
+    }
+
+    const payoutInfo = await PayoutInformation.findOne({
+      provider: providerId,
+      isActive: true,
+    });
+
+    if (!payoutInfo) {
+      return res.status(404).json({
+        success: false,
+        message: "No payout information found to update",
+      });
+    }
+
+    const lastFourDigits = accountNumber.slice(-4);
+    const resolvedAccountType =
+      accountType && ["checking", "savings"].includes(accountType)
+        ? accountType
+        : payoutInfo.accountType || "checking";
+
+    payoutInfo.accountHolderName = accountHolderName.trim();
+    payoutInfo.bankName = bank.name;
+    payoutInfo.bankCode = bank.code;
+    payoutInfo.accountNumber = accountNumber;
+    payoutInfo.routingNumber = routingNumber;
+    payoutInfo.accountType = resolvedAccountType;
+    payoutInfo.lastFourDigits = lastFourDigits;
+
+    // Any update requires re-verification
+    payoutInfo.verificationStatus = "pending";
+    payoutInfo.isVerified = false;
+    payoutInfo.verificationNotes =
+      "Updated by provider; requires admin re-verification";
+
+    // Mark provider as needing verification again
+    provider.isVerified = false;
+
+    // Reset latest verification request to pending so it shows to admin
+    const latestVerification = await Verification.findOne({
+      provider: providerId,
+    }).sort({ createdAt: -1 });
+
+    if (latestVerification) {
+      latestVerification.status = "pending";
+      latestVerification.reviewedBy = undefined;
+      latestVerification.reviewedAt = undefined;
+      latestVerification.rejectionReason = undefined;
+      await latestVerification.save();
+    }
+
+    await provider.save();
+
+    await payoutInfo.save();
+
+    res.json({
+      success: true,
+      message: "Payout information updated successfully",
+      data: {
+        payoutInformation: {
+          ...payoutInfo.toObject(),
+          accountNumber: payoutInfo.getMaskedAccountNumber(),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Update payout information error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to update payout information",
       error: error.message,
     });
   }

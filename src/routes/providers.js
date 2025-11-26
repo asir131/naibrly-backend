@@ -14,6 +14,8 @@ const {
   addServiceArea,
   updateServiceArea,
   removeServiceArea,
+  getProviderReviews,
+  getMyReviews,
   getProvidersByServiceArea,
   getTopProvidersByService,
   getProviderServiceDetailsWithReviews,
@@ -30,7 +32,16 @@ const router = express.Router();
 router.get("/capacity", auth, authorize("provider"), getProviderCapacity);
 router.put("/capacity", auth, authorize("provider"), updateProviderCapacity);
 
+// Provider self reviews (requires bearer token)
+router.get(
+  "/reviews/my",
+  auth,
+  authorize("provider"),
+  getMyReviews
+);
+
 // Service routes - Public (using providerId)
+router.get("/:providerId/reviews", getProviderReviews);
 router.get("/:providerId/services", getProviderServices);
 router.get(
   "/:providerId/services/:serviceName",

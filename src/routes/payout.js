@@ -5,6 +5,7 @@ const {
   getPayoutInformation,
   deletePayoutInformation,
   getPayoutStatus,
+  updatePayoutInformation,
 } = require("../controllers/payoutController");
 
 const { getAllBanks, searchBanks } = require("../controllers/bankController");
@@ -17,6 +18,7 @@ router.get("/banks/search", searchBanks);
 
 // Provider payout routes
 router.post("/information", auth, authorize("provider"), savePayoutInformation);
+router.put("/information", auth, authorize("provider"), updatePayoutInformation);
 router.get("/information", auth, authorize("provider"), getPayoutInformation);
 router.delete(
   "/information",

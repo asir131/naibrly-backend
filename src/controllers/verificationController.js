@@ -1,5 +1,6 @@
 const Verification = require("../models/Verification");
 const ServiceProvider = require("../models/ServiceProvider");
+const PayoutInformation = require("../models/PayoutInformation");
 const { cloudinary } = require("../config/cloudinary");
 
 exports.submitVerification = async (req, res) => {
@@ -234,20 +235,91 @@ exports.getAllVerifications = async (req, res) => {
     const { page = 1, limit = 10, status } = req.query;
     const skip = (page - 1) * limit;
 
-    const filter = {};
-    if (status) filter.status = status;
+    // Only show pending verifications (default) and exclude providers already marked verified
+    const effectiveStatus = status || "pending";
 
-    const verifications = await Verification.find(filter)
-      .populate(
-        "provider",
-        "firstName lastName email businessNameRegistered profileImage"
-      )
-      .populate("reviewedBy", "firstName lastName email")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    const pipeline = [
+      {
+        $match: {
+          status: effectiveStatus,
+        },
+      },
+      {
+        $lookup: {
+          from: "serviceproviders",
+          localField: "provider",
+          foreignField: "_id",
+          as: "provider",
+        },
+      },
+      { $unwind: "$provider" },
+      {
+        $match: {
+          "provider.isVerified": { $ne: true },
+        },
+      },
+      {
+        $lookup: {
+          from: "admins",
+          localField: "reviewedBy",
+          foreignField: "_id",
+          as: "reviewedBy",
+        },
+      },
+      {
+        $unwind: {
+          path: "$reviewedBy",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $project: {
+          provider: {
+            _id: 1,
+            firstName: 1,
+            lastName: 1,
+            email: 1,
+            businessNameRegistered: 1,
+            profileImage: 1,
+            isVerified: 1,
+            createdAt: 1,
+          },
+          reviewedBy: {
+            _id: 1,
+            firstName: 1,
+            lastName: 1,
+            email: 1,
+          },
+          einNumber: 1,
+          businessRegisteredCountry: 1,
+          insuranceDocument: 1,
+          idCardFront: 1,
+          idCardBack: 1,
+          firstName: 1,
+          lastName: 1,
+          status: 1,
+          reviewedAt: 1,
+          rejectionReason: 1,
+          submittedAt: 1,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      },
+      {
+        $sort: { createdAt: -1 },
+      },
+      {
+        $facet: {
+          data: [{ $skip: skip }, { $limit: parseInt(limit) }],
+          totalCount: [{ $count: "count" }],
+        },
+      },
+    ];
 
-    const total = await Verification.countDocuments(filter);
+    const aggResult = await Verification.aggregate(pipeline);
+    const data = aggResult[0]?.data || [];
+    const total = aggResult[0]?.totalCount?.[0]?.count || 0;
+    const verifications = data;
 
     res.json({
       success: true,
@@ -308,6 +380,20 @@ exports.reviewVerification = async (req, res) => {
     if (verification.provider) {
       verification.provider.isVerified = status === "approved";
       await verification.provider.save();
+
+      // Sync payout verification status with admin decision if payout info exists
+      await PayoutInformation.findOneAndUpdate(
+        { provider: verification.provider._id },
+        {
+          verificationStatus: status === "approved" ? "verified" : "failed",
+          isVerified: status === "approved",
+          verificationNotes:
+            status === "approved" ? "Approved with verification" : rejectionReason,
+          verifiedAt: new Date(),
+          verifiedBy: req.user._id,
+        },
+        { new: true }
+      );
     }
 
     res.json({
@@ -322,6 +408,66 @@ exports.reviewVerification = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to review verification",
+      error: error.message,
+    });
+  }
+};
+
+// Admin: get full provider profile (registration, verification, payout)
+exports.getProviderVerificationBundle = async (req, res) => {
+  try {
+    const { providerId } = req.params;
+
+    const provider = await ServiceProvider.findById(providerId).select(
+      "-password -resetPasswordToken -resetPasswordExpires"
+    );
+
+    if (!provider) {
+      return res.status(404).json({
+        success: false,
+        message: "Provider not found",
+      });
+    }
+
+    const latestVerification = await Verification.findOne({
+      provider: providerId,
+    })
+      .sort({ createdAt: -1 })
+      .populate("reviewedBy", "firstName lastName email");
+
+    const payoutInfo = await PayoutInformation.findOne({
+      provider: providerId,
+      isActive: true,
+    }).select("-accountNumber"); // mask raw account number
+
+    const verificationData = latestVerification
+      ? {
+          verificationId: latestVerification._id,
+          ...latestVerification.toObject(),
+        }
+      : null;
+
+    const payoutData = payoutInfo
+      ? {
+          payoutInformationId: payoutInfo._id,
+          ...payoutInfo.toObject(),
+          accountNumber: payoutInfo.getMaskedAccountNumber(),
+        }
+      : null;
+
+    res.json({
+      success: true,
+      data: {
+        provider,
+        verification: verificationData,
+        payoutInformation: payoutData,
+      },
+    });
+  } catch (error) {
+    console.error("Get provider verification bundle error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch provider verification details",
       error: error.message,
     });
   }
