@@ -92,10 +92,17 @@ exports.getProviderCapacity = async (req, res) => {
   }
 };
 
-// Public: list all services for a provider (by providerId)
+// List services for a provider (by providerId or authenticated provider)
 exports.getProviderServices = async (req, res) => {
   try {
-    const { providerId } = req.params;
+    const providerId = req.params.providerId || req.user?._id;
+
+    if (!providerId) {
+      return res.status(400).json({
+        success: false,
+        message: "Provider id is required",
+      });
+    }
 
     const provider = await ServiceProvider.findById(providerId).select(
       "businessNameRegistered servicesProvided rating totalReviews"

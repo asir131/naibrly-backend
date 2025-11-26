@@ -3,7 +3,7 @@ const popularUSBanks = [
   { name: "JPMorgan Chase Bank", code: "CHASE", routingNumber: "021000021" },
   { name: "Wells Fargo Bank", code: "WELLS", routingNumber: "121000248" },
   { name: "Citibank", code: "CITI", routingNumber: "021000089" },
-  { name: "U.S. Bank", code: "USB", routingNumber: "091000022" },
+  { name: "U.S. Bank", code: "USB", routingNumber: "110000000" },
   { name: "Truist Bank", code: "TRUIST", routingNumber: "061000104" },
   { name: "PNC Bank", code: "PNC", routingNumber: "043000096" },
   { name: "TD Bank", code: "TD", routingNumber: "031201360" },

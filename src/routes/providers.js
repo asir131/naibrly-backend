@@ -40,6 +40,9 @@ router.get(
   getMyReviews
 );
 
+// Authenticated provider services (no providerId required)
+router.get("/services", auth, authorize("provider"), getProviderServices);
+
 // Service routes - Public (using providerId)
 router.get("/:providerId/reviews", getProviderReviews);
 router.get("/:providerId/services", getProviderServices);
