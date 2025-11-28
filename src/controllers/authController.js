@@ -2,8 +2,12 @@ const Customer = require("../models/Customer");
 const ServiceProvider = require("../models/ServiceProvider");
 const Service = require("../models/Service");
 const Admin = require("../models/Admin");
+const PayoutInformation = require("../models/PayoutInformation");
+const Verification = require("../models/Verification");
+const WithdrawalRequest = require("../models/WithdrawalRequest");
 const { cloudinary } = require("../config/cloudinary");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 
 const generateToken = (userId) => {
   return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: "30d" });
@@ -607,9 +611,91 @@ const getMe = async (req, res) => {
     if (req.user.role === "customer") {
       userData = await Customer.findById(req.user._id).select("-password");
     } else if (req.user.role === "provider") {
-      userData = await ServiceProvider.findById(req.user._id).select(
-        "-password"
-      );
+      userData = await ServiceProvider.findById(req.user._id)
+        .select("-password")
+        .lean();
+
+      if (userData) {
+        const providerObjectId = new mongoose.Types.ObjectId(req.user._id);
+
+        const totalPayoutAgg = await WithdrawalRequest.aggregate([
+          { $match: { provider: providerObjectId, status: "paid" } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]);
+
+        const totalPayout =
+          totalPayoutAgg.length > 0 ? totalPayoutAgg[0].total : 0;
+
+        const isVerified = !!userData.isVerified;
+
+        let payoutInformation = null;
+        let verificationDocuments = null;
+
+        if (isVerified) {
+          const payoutInfo = await PayoutInformation.findOne({
+            provider: providerObjectId,
+            isActive: true,
+          });
+
+          payoutInformation = payoutInfo
+            ? {
+                id: payoutInfo._id,
+                accountHolderName: payoutInfo.accountHolderName,
+                bankName: payoutInfo.bankName,
+                bankCode: payoutInfo.bankCode,
+                routingNumber: payoutInfo.routingNumber,
+                accountType: payoutInfo.accountType,
+                lastFourDigits: payoutInfo.lastFourDigits,
+                accountNumber: payoutInfo.getMaskedAccountNumber(),
+                verificationStatus: payoutInfo.verificationStatus,
+                isVerified: payoutInfo.isVerified,
+                isActive: payoutInfo.isActive,
+                createdAt: payoutInfo.createdAt,
+                updatedAt: payoutInfo.updatedAt,
+              }
+            : null;
+
+          const approvedVerification = await Verification.findOne({
+            provider: providerObjectId,
+            status: "approved",
+          }).sort({ createdAt: -1 });
+
+          verificationDocuments = approvedVerification
+            ? {
+                verificationId: approvedVerification._id,
+                insuranceDocument: approvedVerification.insuranceDocument,
+                idCardFront: approvedVerification.idCardFront,
+                idCardBack: approvedVerification.idCardBack,
+                reviewedAt: approvedVerification.reviewedAt,
+              }
+            : null;
+        }
+
+        userData.providerProfile = {
+          id: userData._id,
+          businessName: userData.businessNameRegistered,
+          businessLogo: userData.businessLogo,
+          profileImage: userData.profileImage,
+          servicesProvided: userData.servicesProvided,
+          businessAddress: userData.businessAddress,
+          businessServiceDays: userData.businessServiceDays,
+          businessHours: userData.businessHours,
+          rating: userData.rating,
+          totalReviews: userData.totalReviews,
+          isApproved: userData.isApproved,
+          isVerified: userData.isVerified,
+          balances: isVerified
+            ? {
+                availableBalance: userData.availableBalance || 0,
+                pendingPayout: userData.pendingPayout || 0,
+                totalEarnings: userData.totalEarnings || 0,
+                totalPayout,
+              }
+            : null,
+          payoutInformation: isVerified ? payoutInformation : null,
+          documents: isVerified ? verificationDocuments : null,
+        };
+      }
     } else if (req.user.role === "admin") {
       userData = await Admin.findById(req.user._id).select("-password");
     }

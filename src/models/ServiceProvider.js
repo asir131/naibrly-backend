@@ -32,21 +32,21 @@ const serviceProviderSchema = new mongoose.Schema(
     profileImage: {
       url: {
         type: String,
-        default: "",
+        default: "https://placehold.co/200x200?text=Profile",
       },
       publicId: {
         type: String,
-        default: "",
+        default: "placeholder_profile",
       },
     },
     businessLogo: {
       url: {
         type: String,
-        default: "",
+        default: "https://placehold.co/240x240?text=Logo",
       },
       publicId: {
         type: String,
-        default: "",
+        default: "placeholder_logo",
       },
     },
     businessNameRegistered: {

@@ -6,7 +6,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "build": "echo 'No build process'",
-    "test": "echo 'No tests'"
+    "test": "echo 'No tests'",
+    "seed": "node src/scripts/seedAll.js"
   },
   "keywords": [
     "naibrly",

@@ -387,6 +387,45 @@ exports.reviewVerification = async (req, res) => {
         if (verification.lastName) {
           verification.provider.lastName = verification.lastName;
         }
+
+        // Store verified documents on provider profile (documents section)
+        const docEntries = [];
+        if (verification.insuranceDocument?.url) {
+          docEntries.push({
+            name: "insuranceDocument",
+            url: verification.insuranceDocument.url,
+            verified: true,
+          });
+        }
+        if (verification.idCardFront?.url) {
+          docEntries.push({
+            name: "idCardFront",
+            url: verification.idCardFront.url,
+            verified: true,
+          });
+        }
+        if (verification.idCardBack?.url) {
+          docEntries.push({
+            name: "idCardBack",
+            url: verification.idCardBack.url,
+            verified: true,
+          });
+        }
+
+        if (docEntries.length) {
+          const existingMap = new Map(
+            (verification.provider.documents || []).map((d) => [d.name, d])
+          );
+
+          for (const entry of docEntries) {
+            existingMap.set(entry.name, {
+              ...existingMap.get(entry.name),
+              ...entry,
+            });
+          }
+
+          verification.provider.documents = Array.from(existingMap.values());
+        }
       }
       await verification.provider.save();
 

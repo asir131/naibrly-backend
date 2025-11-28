@@ -33,11 +33,11 @@ const customerSchema = new mongoose.Schema(
     profileImage: {
       url: {
         type: String,
-        default: "",
+        default: "https://placehold.co/200x200?text=Profile",
       },
       publicId: {
         type: String,
-        default: "",
+        default: "placeholder_profile",
       },
     },
     address: {

@@ -24,6 +24,7 @@ const {
   addMyService,
   getMyBalance,
   getMyAnalytics,
+  getMyPayoutInformation,
 } = require("../controllers/providerController");
 const { auth, authorize } = require("../middleware/auth");
 
@@ -74,6 +75,12 @@ router.delete(
   deleteMyService
 );
 router.get("/balance/my", auth, authorize("provider"), getMyBalance);
+router.get(
+  "/payout/my-information",
+  auth,
+  authorize("provider"),
+  getMyPayoutInformation
+);
 
 router.post("/service-details", getProviderServiceDetailsWithReviews);
 

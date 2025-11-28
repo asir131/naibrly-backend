@@ -3,6 +3,8 @@ const ProviderServiceFeedback = require("../models/ProviderServiceFeedback");
 const Customer = require("../models/Customer");
 const mongoose = require("mongoose");
 const ServiceRequest = require("../models/ServiceRequest");
+const PayoutInformation = require("../models/PayoutInformation");
+const WithdrawalRequest = require("../models/WithdrawalRequest");
 // Update provider's bundle capacity
 exports.updateProviderCapacity = async (req, res) => {
   try {
@@ -1004,13 +1006,23 @@ exports.getMyBalance = async (req, res) => {
       return res.status(404).json({ success: false, message: "Provider not found" });
     }
 
+    // Sum of all paid withdrawals for this provider
+    const providerObjectId = new mongoose.Types.ObjectId(req.user._id);
+    const totalPayoutResult = await WithdrawalRequest.aggregate([
+      { $match: { provider: providerObjectId, status: "paid" } },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ]);
+
+    const totalPayout =
+      totalPayoutResult.length > 0 ? totalPayoutResult[0].total : 0;
+
     res.json({
       success: true,
       data: {
         availableBalance: provider.availableBalance || 0,
         pendingPayout: provider.pendingPayout || 0,
         totalEarnings: provider.totalEarnings || 0,
-        pendingEarnings: provider.pendingEarnings || 0,
+        totalPayout,
       },
     });
   } catch (error) {
@@ -1018,6 +1030,74 @@ exports.getMyBalance = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to fetch balance",
+      error: error.message,
+    });
+  }
+};
+
+// Provider: get payout information (masked account details)
+exports.getMyPayoutInformation = async (req, res) => {
+  try {
+    const providerId = req.user._id;
+
+    const [provider, payoutInfo] = await Promise.all([
+      ServiceProvider.findById(providerId).select("hasPayoutSetup isVerified"),
+      PayoutInformation.findOne({
+        provider: providerId,
+        isActive: true,
+      }),
+    ]);
+
+    if (!provider) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Provider not found" });
+    }
+
+    if (!provider.isVerified) {
+      return res.status(403).json({
+        success: false,
+        message: "Provider verification required before viewing payout information",
+      });
+    }
+
+    if (!payoutInfo) {
+      return res.status(404).json({
+        success: false,
+        message: "No payout information found",
+        data: {
+          hasPayoutSetup: provider.hasPayoutSetup || false,
+          payoutInformation: null,
+        },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        hasPayoutSetup: provider.hasPayoutSetup || false,
+        payoutInformation: {
+          id: payoutInfo._id,
+          accountHolderName: payoutInfo.accountHolderName,
+          bankName: payoutInfo.bankName,
+          bankCode: payoutInfo.bankCode,
+          routingNumber: payoutInfo.routingNumber,
+          accountType: payoutInfo.accountType,
+          lastFourDigits: payoutInfo.lastFourDigits,
+          accountNumber: payoutInfo.getMaskedAccountNumber(),
+          verificationStatus: payoutInfo.verificationStatus,
+          isVerified: payoutInfo.isVerified,
+          isActive: payoutInfo.isActive,
+          createdAt: payoutInfo.createdAt,
+          updatedAt: payoutInfo.updatedAt,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get provider payout information error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch payout information",
       error: error.message,
     });
   }

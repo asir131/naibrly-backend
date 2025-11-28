@@ -3,6 +3,10 @@ const Customer = require("../models/Customer");
 const ServiceProvider = require("../models/ServiceProvider");
 const Admin = require("../models/Admin");
 const Service = require("../models/Service");
+const PayoutInformation = require("../models/PayoutInformation");
+const Verification = require("../models/Verification");
+const WithdrawalRequest = require("../models/WithdrawalRequest");
+const mongoose = require("mongoose");
 const { deleteImageFromCloudinary } = require("../config/cloudinary");
 
 // Get user profile
@@ -13,7 +17,90 @@ exports.getUserProfile = async (req, res) => {
     if (req.user.role === "customer") {
       user = await Customer.findById(req.user._id).select("-password");
     } else if (req.user.role === "provider") {
-      user = await ServiceProvider.findById(req.user._id).select("-password");
+      const provider = await ServiceProvider.findById(req.user._id)
+        .select("-password")
+        .lean();
+
+      if (provider) {
+        const providerObjectId = new mongoose.Types.ObjectId(req.user._id);
+
+        // Aggregate total payout from paid withdrawals
+        const totalPayoutAgg = await WithdrawalRequest.aggregate([
+          { $match: { provider: providerObjectId, status: "paid" } },
+          { $group: { _id: null, total: { $sum: "$amount" } } },
+        ]);
+        const totalPayout =
+          totalPayoutAgg.length > 0 ? totalPayoutAgg[0].total : 0;
+
+        const isVerified = !!provider.isVerified;
+
+        let payoutInformation = null;
+        let documents = null;
+
+        if (isVerified) {
+          const payoutInfo = await PayoutInformation.findOne({
+            provider: providerObjectId,
+            isActive: true,
+          });
+
+          payoutInformation = payoutInfo
+            ? {
+                id: payoutInfo._id,
+                accountHolderName: payoutInfo.accountHolderName,
+                bankName: payoutInfo.bankName,
+                bankCode: payoutInfo.bankCode,
+                routingNumber: payoutInfo.routingNumber,
+                accountType: payoutInfo.accountType,
+                lastFourDigits: payoutInfo.lastFourDigits,
+                accountNumber: payoutInfo.getMaskedAccountNumber(),
+                verificationStatus: payoutInfo.verificationStatus,
+                isVerified: payoutInfo.isVerified,
+                isActive: payoutInfo.isActive,
+                createdAt: payoutInfo.createdAt,
+                updatedAt: payoutInfo.updatedAt,
+              }
+            : null;
+
+          const approvedVerification = await Verification.findOne({
+            provider: providerObjectId,
+            status: "approved",
+          }).sort({ createdAt: -1 });
+
+          // Prefer documents saved on provider; fallback to latest approved verification
+          if (provider.documents && provider.documents.length) {
+            documents = provider.documents;
+          } else if (approvedVerification) {
+            documents = {
+              verificationId: approvedVerification._id,
+              insuranceDocument: approvedVerification.insuranceDocument,
+              idCardFront: approvedVerification.idCardFront,
+              idCardBack: approvedVerification.idCardBack,
+              reviewedAt: approvedVerification.reviewedAt,
+            };
+          }
+        }
+
+        user = {
+          ...provider,
+          balances: isVerified
+            ? {
+                availableBalance: provider.availableBalance || 0,
+                pendingPayout: provider.pendingPayout || 0,
+                totalEarnings: provider.totalEarnings || 0,
+                totalPayout,
+              }
+            : null,
+          payoutInformation: isVerified ? payoutInformation : null,
+          documents: isVerified ? documents : null,
+        };
+
+        // Remove sensitive/duplicate balance fields from the top level
+        delete user.availableBalance;
+        delete user.pendingPayout;
+        delete user.totalEarnings;
+        delete user.pendingEarnings;
+        delete user.stripeAccountId;
+      }
     } else if (req.user.role === "admin") {
       user = await Admin.findById(req.user._id).select("-password");
     }
