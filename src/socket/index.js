@@ -602,13 +602,19 @@ async function handleSendQuickChat(socket, data) {
 
     io.to(`conversation_${conversation._id}`).emit("message", messageData);
 
-    // Notify the other user(s)
+    // Notify the other user even if they are not in the room
+    let otherUserId = null;
     if (conversation.providerId) {
-      const otherUserId =
+      otherUserId =
         socket.userRole === "customer"
           ? conversation.providerId
           : conversation.customerId;
-    if (otherUserId && userSocketMap.has(otherUserId.toString())) {
+    } else if (conversation.bundleId) {
+      // For bundles without provider, notify creator/participant when someone else messages
+      otherUserId = socket.userRole === "customer" ? null : conversation.customerId;
+    }
+
+    if (otherUserId) {
       io.to(`user_${otherUserId}`).emit("message", {
         type: "conversation_updated",
         data: {
@@ -619,24 +625,8 @@ async function handleSendQuickChat(socket, data) {
           hasNewMessage: true,
           quickChatUsed: true,
         },
-        });
-      }
-    } else if (conversation.bundleId) {
-      // For bundles without provider, notify the bundle creator if someone else is messaging
-      const otherUserId =
-        socket.userRole === "customer" ? null : conversation.customerId;
-      if (otherUserId && userSocketMap.has(otherUserId.toString())) {
-        io.to(`user_${otherUserId}`).emit("message", {
-          type: "conversation_updated",
-          data: {
-            conversationId: conversation._id,
-            lastMessage: quickChat.content,
-            lastMessageAt: new Date(),
-            hasNewMessage: true,
-            quickChatUsed: true,
-          },
-        });
-      }
+      });
+      io.to(`user_${otherUserId}`).emit("message", messageData);
     }
 
     console.log("🎉 Sending message_sent confirmation");
@@ -693,6 +683,7 @@ async function handleAuthenticate(socket, data) {
 
     socket.isAuthenticated = true;
     userSocketMap.set(socket.userId, socket.id);
+    socket.join(`user_${socket.userId}`);
 
     console.log(
       `✅ Socket ${socket.id} authenticated as user ${socket.userId} (${socket.userRole})`
@@ -875,13 +866,15 @@ async function handleSendMessage(socket, data) {
       },
     };
 
+    // Emit to the conversation room (participants who joined)
     io.to(`conversation_${conversation._id}`).emit("message", messageData);
 
+    // Notify the other user even if they aren't in the room
     const otherUserId =
       socket.userRole === "customer"
         ? conversation.providerId
         : conversation.customerId;
-    if (otherUserId && userSocketMap.has(otherUserId.toString())) {
+    if (otherUserId) {
       io.to(`user_${otherUserId}`).emit("message", {
         type: "conversation_updated",
         data: {
@@ -892,6 +885,8 @@ async function handleSendMessage(socket, data) {
           hasNewMessage: true,
         },
       });
+
+      io.to(`user_${otherUserId}`).emit("message", messageData);
     }
 
     socket.emit("message", {
