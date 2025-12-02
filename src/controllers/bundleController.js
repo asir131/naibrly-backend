@@ -328,6 +328,39 @@ exports.joinBundle = async (req, res) => {
 
     await bundle.save();
 
+    // If a provider is already assigned, ensure a conversation exists for this participant
+    if (bundle.provider) {
+      try {
+        const existingConversation = await Conversation.findOne({
+          bundleId: bundle._id,
+          customerId,
+        });
+
+        if (!existingConversation) {
+          const conversation = new Conversation({
+            customerId,
+            providerId: bundle.provider,
+            bundleId: bundle._id,
+            messages: [],
+            isActive: true,
+          });
+          await conversation.save();
+          console.log("✅ Created conversation for new participant:", {
+            conversationId: conversation._id,
+            customerId,
+            bundleId: bundle._id,
+          });
+        }
+      } catch (conversationError) {
+        console.error("❌ Failed to create conversation for new participant:", {
+          error: conversationError,
+          customerId,
+          bundleId: bundle._id,
+        });
+        // Do not fail the join flow if conversation creation fails
+      }
+    }
+
     // Populate for response
     await bundle.populate([
       { path: "creator", select: "firstName lastName profileImage" },
@@ -712,28 +745,46 @@ exports.updateBundleStatus = async (req, res) => {
         });
       }
 
-      // Create a SINGLE conversation for the bundle
+      // Create separate conversations for each participant (including creator)
       try {
-        const existingConversation = await Conversation.findOne({
-          bundleId: bundle._id,
+        const participantIds = new Set();
+        if (bundle.creator) {
+          participantIds.add(bundle.creator.toString());
+        }
+        bundle.participants?.forEach((p) => {
+          if (p.customer) {
+            participantIds.add(p.customer.toString());
+          }
         });
 
-        if (!existingConversation) {
-          // Create one conversation for the bundle creator with provider
-          const conversation = new Conversation({
-            customerId: bundle.creator, // Bundle creator is the main customer
-            providerId: bundle.provider,
+        for (const customerId of participantIds) {
+          const existingConversation = await Conversation.findOne({
             bundleId: bundle._id,
-            messages: [],
-            isActive: true,
+            customerId,
           });
-          await conversation.save();
-          console.log("✅ Created bundle conversation:", conversation._id);
-        } else {
-          console.log("✅ Bundle conversation already exists");
+
+          if (!existingConversation) {
+            const conversation = new Conversation({
+              customerId,
+              providerId: bundle.provider,
+              bundleId: bundle._id,
+              messages: [],
+              isActive: true,
+            });
+            await conversation.save();
+            console.log("? Created bundle conversation:", {
+              conversationId: conversation._id,
+              customerId,
+            });
+          } else {
+            console.log("? Bundle conversation already exists:", {
+              conversationId: existingConversation._id,
+              customerId,
+            });
+          }
         }
       } catch (conversationError) {
-        console.error("❌ Conversation creation error:", conversationError);
+        console.error("? Conversation creation error:", conversationError);
         // Don't fail the whole request if conversation creation fails
       }
     } else if (status === "declined") {
@@ -1328,16 +1379,42 @@ exports.acceptProviderOffer = async (req, res) => {
 
     await bundle.save();
 
-    // Create separate conversations for each participant with provider
-    for (const participant of bundle.participants) {
-      const conversation = new Conversation({
-        customerId: participant.customer,
-        providerId: bundle.provider,
-        bundleId: bundle._id,
-        messages: [],
-        isActive: true,
+    // Create separate conversations for each participant (including creator)
+    try {
+      const participantIds = new Set();
+      if (bundle.creator) {
+        participantIds.add(bundle.creator.toString());
+      }
+      bundle.participants?.forEach((p) => {
+        if (p.customer) {
+          participantIds.add(p.customer.toString());
+        }
       });
-      await conversation.save();
+
+      for (const customerId of participantIds) {
+        const existingConversation = await Conversation.findOne({
+          bundleId: bundle._id,
+          customerId,
+        });
+
+        if (!existingConversation) {
+          const conversation = new Conversation({
+            customerId,
+            providerId: bundle.provider,
+            bundleId: bundle._id,
+            messages: [],
+            isActive: true,
+          });
+          await conversation.save();
+          console.log("✅ Created bundle conversation (offer accepted):", {
+            conversationId: conversation._id,
+            customerId,
+          });
+        }
+      }
+    } catch (conversationError) {
+      console.error("❌ Conversation creation error (offer accepted):", conversationError);
+      // Do not fail the response on conversation creation issues
     }
 
     res.json({
@@ -1765,16 +1842,42 @@ exports.providerAcceptBundle = async (req, res) => {
 
     await bundle.save();
 
-    // Create separate conversations for each participant
-    for (const participant of bundle.participants) {
-      const conversation = new Conversation({
-        customerId: participant.customer,
-        providerId: bundle.provider,
-        bundleId: bundle._id,
-        messages: [],
-        isActive: true,
+    // Create separate conversations for each participant (including creator)
+    try {
+      const participantIds = new Set();
+      if (bundle.creator) {
+        participantIds.add(bundle.creator.toString());
+      }
+      bundle.participants?.forEach((p) => {
+        if (p.customer) {
+          participantIds.add(p.customer.toString());
+        }
       });
-      await conversation.save();
+
+      for (const customerId of participantIds) {
+        const existingConversation = await Conversation.findOne({
+          bundleId: bundle._id,
+          customerId,
+        });
+
+        if (!existingConversation) {
+          const conversation = new Conversation({
+            customerId,
+            providerId: bundle.provider,
+            bundleId: bundle._id,
+            messages: [],
+            isActive: true,
+          });
+          await conversation.save();
+          console.log("✅ Created bundle conversation (direct accept):", {
+            conversationId: conversation._id,
+            customerId,
+          });
+        }
+      }
+    } catch (conversationError) {
+      console.error("❌ Conversation creation error (direct accept):", conversationError);
+      // Do not fail the response on conversation creation issues
     }
 
     // Populate for response
@@ -1943,3 +2046,4 @@ exports.addBundleReview = async (req, res) => {
     });
   }
 };
+
