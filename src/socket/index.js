@@ -1,5 +1,6 @@
 const { Server: SocketIOServer } = require("socket.io");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 const Conversation = require("../models/Conversation");
 const QuickChat = require("../models/QuickChat");
 const ServiceRequest = require("../models/ServiceRequest");
@@ -19,7 +20,7 @@ const authenticateSocket = async (socket, next) => {
     socket.handshake.auth.token ||
     socket.handshake.headers.token ||
     (socket.handshake.headers.authorization &&
-    socket.handshake.headers.authorization.toLowerCase().startsWith("bearer ")
+      socket.handshake.headers.authorization.toLowerCase().startsWith("bearer ")
       ? socket.handshake.headers.authorization.split(" ")[1]
       : null) ||
     socket.handshake.query.token;
@@ -59,133 +60,103 @@ const authenticateSocket = async (socket, next) => {
   next();
 };
 
-// Helper function to create or get conversation for both service requests and bundles
-async function getOrCreateConversation(socket, requestId, bundleId) {
+// Handler to get all conversations for a customer
+async function handleGetCustomerConversations(socket) {
   try {
-    console.log("🔄 getOrCreateConversation called with:", {
-      requestId,
-      bundleId,
-    });
-
-    let conversation;
-    let customerId, providerId;
-
-    if (requestId) {
-      console.log("🔍 Looking for service request:", requestId);
-      // For service request conversation
-      const serviceRequest = await ServiceRequest.findById(requestId)
-        .populate("customer")
-        .populate("provider");
-
-      if (!serviceRequest) {
-        console.log("❌ Service request not found:", requestId);
-        throw new Error("Service request not found");
-      }
-
-      console.log("✅ Service request found:", {
-        customer: serviceRequest.customer?._id,
-        provider: serviceRequest.provider?._id,
+    if (!socket.userId || socket.userRole !== "customer") {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Only customers can use this endpoint" },
       });
-
-      // Check if user has access to this conversation
-      const hasAccess =
-        socket.userId === serviceRequest.customer._id.toString() ||
-        (serviceRequest.provider &&
-          socket.userId === serviceRequest.provider._id.toString());
-
-      if (!hasAccess) {
-        console.log("❌ Access denied for user:", socket.userId);
-        throw new Error("Access denied to this conversation");
-      }
-
-      conversation = await Conversation.findOne({ requestId });
-
-      if (!conversation) {
-        console.log(
-          "🆕 Creating new conversation for service request:",
-          requestId
-        );
-        conversation = new Conversation({
-          customerId: serviceRequest.customer._id,
-          providerId: serviceRequest.provider._id,
-          requestId: requestId,
-          messages: [],
-          isActive: true,
-        });
-        await conversation.save();
-        console.log(
-          "✅ Conversation created for service request:",
-          conversation._id
-        );
-      } else {
-        console.log(
-          "📁 Found existing conversation for service request:",
-          conversation._id
-        );
-      }
-    } else if (bundleId) {
-      console.log("🔍 Looking for bundle:", bundleId);
-      // For bundle conversation
-      const bundle = await Bundle.findById(bundleId)
-        .populate("creator")
-        .populate("provider");
-
-      if (!bundle) {
-        console.log("❌ Bundle not found:", bundleId);
-        throw new Error("Bundle not found");
-      }
-
-      console.log("✅ Bundle found:", {
-        creator: bundle.creator?._id,
-        provider: bundle.provider?._id,
-        status: bundle.status,
-      });
-
-      // Check if user has access to this bundle conversation
-      const hasAccess =
-        socket.userId === bundle.creator._id.toString() ||
-        (bundle.provider && socket.userId === bundle.provider._id.toString());
-
-      if (!hasAccess) {
-        console.log("❌ Access denied for user:", socket.userId);
-        throw new Error("Access denied to this bundle conversation");
-      }
-
-      conversation = await Conversation.findOne({ bundleId });
-
-      if (!conversation) {
-        console.log("🆕 Creating new conversation for bundle:", bundleId);
-        conversation = new Conversation({
-          customerId: bundle.creator._id,
-          providerId: bundle.provider ? bundle.provider._id : null,
-          bundleId: bundleId,
-          messages: [],
-          isActive: true,
-        });
-        await conversation.save();
-        console.log("✅ Conversation created for bundle:", conversation._id);
-      } else {
-        console.log(
-          "📁 Found existing conversation for bundle:",
-          conversation._id
-        );
-      }
-    } else {
-      throw new Error("Either requestId or bundleId is required");
+      return;
     }
 
-    return conversation;
+    console.log("📋 Getting all conversations for customer:", socket.userId);
+
+    const conversations = await Conversation.find({
+      customerId: socket.userId,
+      isActive: true,
+    })
+      .populate("customerId", "firstName lastName profileImage")
+      .populate(
+        "providerId",
+        "firstName lastName businessNameRegistered profileImage"
+      )
+      .populate({
+        path: "requestId",
+        select: "serviceType status scheduledDate scheduledTime avgPrice",
+      })
+      .populate({
+        path: "bundleId",
+        select: "title status scheduledDate scheduledTime totalPrice",
+      })
+      .sort({ lastMessageAt: -1, updatedAt: -1 })
+      .lean();
+
+    const formattedConversations = conversations.map((conv) => {
+      const lastMessage = conv.messages[conv.messages.length - 1];
+      
+      let status = "unknown";
+      let serviceType = "Unknown";
+      let price = null;
+      let date = null;
+      
+      if (conv.requestId) {
+        status = conv.requestId.status;
+        serviceType = conv.requestId.serviceType;
+        price = conv.requestId.avgPrice;
+        date = conv.requestId.scheduledDate;
+      } else if (conv.bundleId) {
+        status = conv.bundleId.status;
+        serviceType = conv.bundleId.title;
+        price = conv.bundleId.totalPrice;
+        date = conv.bundleId.scheduledDate;
+      }
+      
+      return {
+        _id: conv._id,
+        conversationId: conv._id,
+        customer: conv.customerId,
+        provider: conv.providerId,
+        requestId: conv.requestId?._id || null,
+        bundleId: conv.bundleId?._id || null,
+        serviceType: serviceType,
+        status: status,
+        avgPrice: price,
+        scheduledDate: date,
+        lastMessage: conv.lastMessage || "",
+        lastMessageAt: conv.lastMessageAt || conv.updatedAt,
+        lastMessageSender: lastMessage?.senderRole || null,
+        unreadCount: lastMessage?.senderRole === "provider" ? 1 : 0,
+        messagesCount: conv.messages.length,
+        isActive: conv.isActive,
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
+        conversationType: conv.requestId ? "service_request" : "bundle",
+      };
+    });
+
+    socket.emit("message", {
+      type: "customer_conversations",
+      data: {
+        conversations: formattedConversations,
+        totalCount: formattedConversations.length,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    console.log(`✅ Sent ${formattedConversations.length} conversations to customer`);
   } catch (error) {
-    console.error("❌ Error in getOrCreateConversation:", error.message);
-    throw error;
+    console.error("❌ Get customer conversations error:", error);
+    socket.emit("message", {
+      type: "error",
+      data: { message: "Failed to get conversations: " + error.message },
+    });
   }
 }
 
-// New helper to support per-participant bundle conversations
-async function getOrCreateConversationV2(
-  socket,
-  { requestId, bundleId, customerIdForBundle }
-) {
+// FIXED: Unified function to get or create conversation
+async function getOrCreateConversationV2(socket, { requestId, bundleId, customerIdForBundle }) {
   try {
     console.log("[chat] getOrCreateConversationV2:", {
       requestId,
@@ -199,6 +170,7 @@ async function getOrCreateConversationV2(
       throw new Error("Either requestId or bundleId is required");
     }
 
+    // Service Request Conversation
     if (requestId) {
       const serviceRequest = await ServiceRequest.findById(requestId)
         .populate("customer")
@@ -226,62 +198,74 @@ async function getOrCreateConversationV2(
       return conversation;
     }
 
-    // Bundle conversation (per participant)
+    // Bundle Conversation
     const bundle = await Bundle.findById(bundleId)
       .populate("creator")
       .populate("provider")
-      .populate("participants.customer")
-      .populate("providerOffers.provider");
+      .populate("participants.customer");
 
     if (!bundle) throw new Error("Bundle not found");
 
-    const isCreator =
-      bundle.creator && socket.userId === bundle.creator._id.toString();
-    const isProvider =
-      bundle.provider && socket.userId === bundle.provider._id.toString();
-    const isOfferProvider = bundle.providerOffers?.some(
-      (o) => o.provider && o.provider.toString() === socket.userId
-    );
+    // Determine if user can access this bundle
+    const isCreator = bundle.creator && socket.userId === bundle.creator._id.toString();
+    const isProvider = bundle.provider && socket.userId === bundle.provider._id.toString();
     const isParticipant = bundle.participants?.some(
       (p) => p.customer && p.customer._id.toString() === socket.userId
     );
 
-    if (!isCreator && !isProvider && !isParticipant && !isOfferProvider) {
+    if (!isCreator && !isProvider && !isParticipant) {
       throw new Error("Access denied to this bundle conversation");
     }
 
+    // Determine which customer ID to use for the conversation
     let targetCustomerId;
     if (socket.userRole === "customer") {
-      targetCustomerId = socket.userId; // participant or creator
+      targetCustomerId = socket.userId; // Customer accessing their own conversation
     } else if (customerIdForBundle) {
-      targetCustomerId = customerIdForBundle; // provider targets a participant/creator
-    } else if (bundle.creator) {
-      targetCustomerId = bundle.creator._id.toString(); // fallback
+      // Provider specifying which participant to talk to
+      targetCustomerId = customerIdForBundle;
+    } else {
+      // Provider - try to find a conversation they already have
+      // First check if they have any existing conversation with any participant
+      const existingConversation = await Conversation.findOne({
+        bundleId,
+        providerId: socket.userId,
+      });
+      
+      if (existingConversation) {
+        return existingConversation;
+      }
+      
+      // If no existing conversation and no customerId specified, use bundle creator
+      if (bundle.creator) {
+        targetCustomerId = bundle.creator._id.toString();
+      } else {
+        throw new Error("customerIdForBundle is required for provider to access bundle conversation");
+      }
     }
 
-    const targetIsParticipantOrCreator =
-      (bundle.creator && bundle.creator._id.toString() === targetCustomerId) ||
+    // Verify the target customer is part of the bundle
+    const isValidCustomer =
+      targetCustomerId === bundle.creator._id.toString() ||
       bundle.participants?.some(
         (p) => p.customer && p.customer._id.toString() === targetCustomerId
       );
 
-    if (!targetIsParticipantOrCreator) {
+    if (!isValidCustomer) {
       throw new Error("Target customer is not part of this bundle");
     }
 
+    // Find or create conversation
     let conversation = await Conversation.findOne({
       bundleId,
       customerId: targetCustomerId,
+      providerId: socket.userRole === "provider" ? socket.userId : bundle.provider ? bundle.provider._id : null,
     });
 
     if (!conversation) {
       conversation = await Conversation.create({
         customerId: targetCustomerId,
-        providerId: bundle.provider
-          ? bundle.provider._id
-          : socket.userRole === "provider"
-          ? socket.userId
-          : null,
+        providerId: socket.userRole === "provider" ? socket.userId : bundle.provider ? bundle.provider._id : null,
         bundleId,
         messages: [],
         isActive: true,
@@ -295,30 +279,7 @@ async function getOrCreateConversationV2(
   }
 }
 
-// Helper functions
-// Create conversations for all bundle participants (including creator)
-async function createParticipantConversations(socket, bundle) {
-  const participantIds = new Set();
-  if (bundle.creator?._id) {
-    participantIds.add(bundle.creator._id.toString());
-  }
-  bundle.participants?.forEach((p) => {
-    if (p.customer?._id) {
-      participantIds.add(p.customer._id.toString());
-    }
-  });
-
-  const conversations = [];
-  for (const customerId of participantIds) {
-    const conv = await getOrCreateConversationV2(socket, {
-      bundleId: bundle._id.toString(),
-      customerIdForBundle: customerId,
-    });
-    conversations.push(conv);
-  }
-  return conversations;
-}
-
+// FIXED: Enhanced handleJoinConversation to handle provider bundle access
 async function handleJoinConversation(socket, data) {
   try {
     console.log("👥 Join conversation request:", data);
@@ -341,49 +302,9 @@ async function handleJoinConversation(socket, data) {
       return;
     }
 
-    // Provider joins by bundleId only -> create conversations for all participants
+    // Special handling for providers joining bundles without customerId
     if (bundleId && socket.userRole === "provider" && !customerId) {
-      const bundle = await Bundle.findById(bundleId)
-        .populate("creator")
-        .populate("provider")
-        .populate("participants.customer")
-        .populate("providerOffers.provider");
-
-      if (!bundle) {
-        throw new Error("Bundle not found");
-      }
-
-      const isCreator =
-        bundle.creator && socket.userId === bundle.creator._id.toString();
-      const isProvider =
-        bundle.provider && socket.userId === bundle.provider._id.toString();
-      const isOfferProvider = bundle.providerOffers?.some(
-        (o) => o.provider && o.provider.toString() === socket.userId
-      );
-
-      if (!isProvider && !isOfferProvider && !isCreator) {
-        throw new Error("Access denied to this bundle conversation");
-      }
-
-      const conversations = await createParticipantConversations(
-        socket,
-        bundle
-      );
-
-      conversations.forEach((conv) => socket.join(`conversation_${conv._id}`));
-
-      socket.emit("message", {
-        type: "joined_conversation",
-        data: {
-          bundleId,
-          conversations: conversations.map((c) => ({
-            conversationId: c._id,
-            customerId: c.customerId,
-          })),
-          message: "Joined all participant conversations for this bundle",
-          timestamp: new Date().toISOString(),
-        },
-      });
+      await handleProviderJoinBundle(socket, bundleId);
       return;
     }
 
@@ -395,25 +316,24 @@ async function handleJoinConversation(socket, data) {
 
     if (conversation) {
       socket.join(`conversation_${conversation._id}`);
-      console.log(
-        `✅ User ${socket.userId} joined conversation ${conversation._id}`
-      );
+      console.log(`✅ User ${socket.userId} joined conversation ${conversation._id}`);
 
+      // Send success response
       socket.emit("message", {
         type: "joined_conversation",
         data: {
           conversationId: conversation._id,
           requestId: requestId,
           bundleId: bundleId,
+          customerId: conversation.customerId,
+          providerId: conversation.providerId,
           message: "Successfully joined conversation",
           timestamp: new Date().toISOString(),
         },
       });
 
       // Send conversation history
-      const populatedConversation = await Conversation.findById(
-        conversation._id
-      )
+      const populatedConversation = await Conversation.findById(conversation._id)
         .populate("customerId", "firstName lastName profileImage")
         .populate(
           "providerId",
@@ -429,6 +349,8 @@ async function handleJoinConversation(socket, data) {
             provider: populatedConversation.providerId,
             requestId: populatedConversation.requestId,
             bundleId: populatedConversation.bundleId,
+            lastMessage: populatedConversation.lastMessage,
+            lastMessageAt: populatedConversation.lastMessageAt,
           },
           messages: populatedConversation.messages,
         },
@@ -447,11 +369,242 @@ async function handleJoinConversation(socket, data) {
   }
 }
 
+// New helper function for providers joining bundles
+async function handleProviderJoinBundle(socket, bundleId) {
+  try {
+    console.log(`👨‍🔧 Provider ${socket.userId} joining bundle ${bundleId}`);
+    
+    const bundle = await Bundle.findById(bundleId)
+      .populate("creator")
+      .populate("provider")
+      .populate("participants.customer");
+
+    if (!bundle) {
+      throw new Error("Bundle not found");
+    }
+
+    // Check if provider has access to this bundle
+    const isProvider = bundle.provider && socket.userId === bundle.provider._id.toString();
+    const isOfferProvider = bundle.providerOffers?.some(
+      (offer) => offer.provider && offer.provider.toString() === socket.userId
+    );
+
+    if (!isProvider && !isOfferProvider) {
+      throw new Error("Provider does not have access to this bundle");
+    }
+
+    // Get all conversations this provider has with bundle participants
+    const conversations = await Conversation.find({
+      bundleId,
+      providerId: socket.userId,
+    })
+      .populate("customerId", "firstName lastName profileImage")
+      .populate(
+        "providerId",
+        "firstName lastName businessNameRegistered profileImage"
+    );
+
+    // Join all conversation rooms
+    conversations.forEach((conv) => {
+      socket.join(`conversation_${conv._id}`);
+      console.log(`✅ Provider joined conversation ${conv._id} with customer ${conv.customerId._id}`);
+    });
+
+    // If no conversations exist yet, create one with the bundle creator
+    if (conversations.length === 0 && bundle.creator) {
+      console.log("🆕 Creating conversation with bundle creator");
+      const newConversation = await Conversation.create({
+        customerId: bundle.creator._id,
+        providerId: socket.userId,
+        bundleId,
+        messages: [],
+        isActive: true,
+      });
+      
+      socket.join(`conversation_${newConversation._id}`);
+      conversations.push(newConversation);
+      
+      // Send conversation history for the new conversation
+      const populatedConversation = await Conversation.findById(newConversation._id)
+        .populate("customerId", "firstName lastName profileImage")
+        .populate("providerId", "firstName lastName businessNameRegistered profileImage");
+
+      socket.emit("message", {
+        type: "conversation_history",
+        data: {
+          conversation: {
+            _id: populatedConversation._id,
+            customer: populatedConversation.customerId,
+            provider: populatedConversation.providerId,
+            bundleId: populatedConversation.bundleId,
+          },
+          messages: populatedConversation.messages,
+        },
+      });
+    }
+
+    // Send list of all conversations
+    socket.emit("message", {
+      type: "provider_bundle_conversations",
+      data: {
+        bundleId: bundleId,
+        bundleTitle: bundle.title,
+        conversations: conversations.map(conv => ({
+          conversationId: conv._id,
+          customerId: conv.customerId._id || conv.customerId,
+          customerName: conv.customerId?.firstName + ' ' + conv.customerId?.lastName,
+          providerId: conv.providerId._id || conv.providerId,
+          messageCount: conv.messages.length,
+          lastMessage: conv.lastMessage,
+          lastMessageAt: conv.lastMessageAt,
+        })),
+        message: `Joined ${conversations.length} conversation(s) for bundle ${bundle.title}`,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    console.log(`✅ Provider joined ${conversations.length} conversation(s) for bundle ${bundleId}`);
+    
+  } catch (error) {
+    console.error("❌ Provider join bundle error:", error);
+    throw error;
+  }
+}
+
+// New function to get bundle participants for provider
+async function handleGetBundleParticipants(socket, data) {
+  try {
+    const { bundleId } = data;
+    
+    if (!bundleId) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "bundleId is required" }
+      });
+      return;
+    }
+
+    if (socket.userRole !== "provider") {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Only providers can use this endpoint" }
+      });
+      return;
+    }
+
+    const bundle = await Bundle.findById(bundleId)
+      .populate("creator", "firstName lastName profileImage email phone")
+      .populate("participants.customer", "firstName lastName profileImage email phone")
+      .populate("providerOffers.provider");
+
+    if (!bundle) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Bundle not found" }
+      });
+      return;
+    }
+
+    // Check if provider has access
+    const isProvider = bundle.provider && socket.userId === bundle.provider._id.toString();
+    const isOfferProvider = bundle.providerOffers?.some(
+      (offer) => offer.provider && offer.provider._id.toString() === socket.userId
+    );
+
+    if (!isProvider && !isOfferProvider) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Access denied to this bundle" }
+      });
+      return;
+    }
+
+    // Get all participants including creator
+    const participants = [];
+    
+    if (bundle.creator) {
+      participants.push({
+        _id: bundle.creator._id,
+        firstName: bundle.creator.firstName,
+        lastName: bundle.creator.lastName,
+        profileImage: bundle.creator.profileImage,
+        email: bundle.creator.email,
+        phone: bundle.creator.phone,
+        role: "creator",
+        joinedAt: bundle.createdAt,
+      });
+    }
+
+    bundle.participants?.forEach((participant) => {
+      if (participant.customer) {
+        participants.push({
+          _id: participant.customer._id,
+          firstName: participant.customer.firstName,
+          lastName: participant.customer.lastName,
+          profileImage: participant.customer.profileImage,
+          email: participant.customer.email,
+          phone: participant.customer.phone,
+          role: "participant",
+          joinedAt: participant.joinedAt,
+        });
+      }
+    });
+
+    // Get existing conversations
+    const existingConversations = await Conversation.find({
+      bundleId,
+      providerId: socket.userId,
+    }).select("customerId");
+
+    const existingCustomerIds = existingConversations.map(conv => conv.customerId.toString());
+
+    socket.emit("message", {
+      type: "bundle_participants",
+      data: {
+        bundleId: bundleId,
+        bundleTitle: bundle.title,
+        participants: participants,
+        existingConversations: existingCustomerIds,
+        totalParticipants: participants.length,
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+  } catch (error) {
+    console.error("❌ Get bundle participants error:", error);
+    socket.emit("message", {
+      type: "error",
+      data: { message: "Failed to get bundle participants: " + error.message }
+    });
+  }
+}
+
+// Helper function to emit realtime quick messages
+const emitRealtimeQuickMessage = async (conversationId, messageData) => {
+  try {
+    // Emit to everyone in the conversation room
+    io.to(`conversation_${conversationId}`).emit("message", {
+      type: "new_quick_message",
+      data: messageData
+    });
+
+    // Also emit a general new_message event for compatibility
+    io.to(`conversation_${conversationId}`).emit("message", {
+      type: "new_message",
+      data: messageData
+    });
+
+    console.log(`📤 Realtime quick message emitted to conversation ${conversationId}`);
+  } catch (error) {
+    console.error("❌ Error emitting realtime message:", error);
+  }
+};
+
+// Realtime Quick Chat Handler
 async function handleSendQuickChat(socket, data) {
   try {
     console.log("💬 Send quick chat request:", data);
 
-    // Validate authentication and role
     if (!socket.userId || !socket.userRole) {
       socket.emit("message", {
         type: "error",
@@ -470,31 +623,18 @@ async function handleSendQuickChat(socket, data) {
       return;
     }
 
-    console.log("🔍 Looking for quick chat:", quickChatId);
-
-    // Get quick chat content - allow admin quick chats for both customers and providers
+    // Get quick chat
     const quickChat = await QuickChat.findOne({
       _id: quickChatId,
       isActive: true,
       $or: [
-        // User's own quick chats
-        {
-          createdBy: socket.userId,
-          createdByRole: socket.userRole,
-        },
-        // Admin quick chats - accessible to both customers and providers
-        {
-          createdByRole: "admin",
-        },
-        // Quick chats from same role (customers can use other customers' quick chats, providers can use other providers')
-        {
-          createdByRole: socket.userRole,
-        },
+        { createdBy: socket.userId },
+        { createdByRole: "admin" },
+        { createdByRole: socket.userRole },
       ],
     });
 
     if (!quickChat) {
-      console.log("❌ Quick chat not found or user doesn't have permission");
       socket.emit("message", {
         type: "error",
         data: { message: "Quick chat not found or access denied" },
@@ -502,15 +642,7 @@ async function handleSendQuickChat(socket, data) {
       return;
     }
 
-    console.log("✅ Quick chat found:", {
-      content: quickChat.content,
-      createdByRole: quickChat.createdByRole,
-      createdBy: quickChat.createdBy,
-      isAdminCreated: quickChat.createdByRole === "admin",
-    });
-
     // Get or create conversation
-    console.log("🔄 Getting or creating conversation...");
     const conversation = await getOrCreateConversationV2(socket, {
       requestId,
       bundleId,
@@ -518,7 +650,6 @@ async function handleSendQuickChat(socket, data) {
     });
 
     if (!conversation) {
-      console.log("❌ Conversation not found after getOrCreate");
       socket.emit("message", {
         type: "error",
         data: { message: "Conversation not found" },
@@ -526,11 +657,9 @@ async function handleSendQuickChat(socket, data) {
       return;
     }
 
-    console.log("✅ Conversation ready:", conversation._id);
-    console.log("📝 Current messages count:", conversation.messages.length);
-
-    // Create message with validated role
+    // Create message with unique ID
     const message = {
+      _id: new mongoose.Types.ObjectId(),
       senderId: socket.userId,
       senderRole: socket.userRole,
       content: quickChat.content,
@@ -545,130 +674,102 @@ async function handleSendQuickChat(socket, data) {
       },
     };
 
-    console.log("📨 Creating message:", {
-      senderId: socket.userId,
-      senderRole: socket.userRole,
-      content: quickChat.content,
-      isAdminQuickChat: quickChat.createdByRole === "admin",
-    });
-
-    // Add message to conversation
-    console.log("➕ Adding message to conversation array...");
+    // Save message to conversation
     conversation.messages.push(message);
     conversation.lastMessage = quickChat.content;
     conversation.lastMessageAt = new Date();
-
-    // Save the conversation with the new message
-    console.log("💾 Saving conversation to database...");
     await conversation.save();
-    console.log("✅ Conversation saved successfully!");
-    console.log("📊 New messages count:", conversation.messages.length);
 
-    // Verify the message was saved by fetching the conversation again
-    const updatedConversation = await Conversation.findById(conversation._id);
-    console.log(
-      "🔍 Verification - messages in DB:",
-      updatedConversation.messages.length
-    );
-
-    // Increment quick chat usage count (only if not admin's own quick chat)
-    console.log("📈 Incrementing quick chat usage...");
+    // Increment quick chat usage
     quickChat.usageCount += 1;
     await quickChat.save();
-    console.log("✅ Quick chat usage count updated:", quickChat.usageCount);
 
-    // Emit to everyone in the conversation room
-    console.log(
-      "📤 Emitting new_message to room:",
-      `conversation_${conversation._id}`
-    );
-
-    const messageData = {
-      type: "new_message",
-      data: {
-        conversationId: conversation._id,
-        message: message,
-        sender: {
-          id: socket.userId,
-          role: socket.userRole,
-        },
-        quickChatInfo: {
-          id: quickChat._id,
-          isAdminCreated: quickChat.createdByRole === "admin",
-          usageCount: quickChat.usageCount,
-        },
-      },
-    };
-
-    io.to(`conversation_${conversation._id}`).emit("message", messageData);
-
-    // Notify the other user even if they are not in the room
-    let otherUserId = null;
-    if (conversation.providerId) {
-      otherUserId =
-        socket.userRole === "customer"
-          ? conversation.providerId
-          : conversation.customerId;
-    } else if (conversation.bundleId) {
-      // For bundles without provider, notify creator/participant when someone else messages
-      otherUserId = socket.userRole === "customer" ? null : conversation.customerId;
+    // Get user info for realtime message
+    let senderInfo = {};
+    if (socket.userRole === "customer") {
+      const customer = await Customer.findById(socket.userId)
+        .select("firstName lastName profileImage");
+      senderInfo = customer;
+    } else {
+      const provider = await ServiceProvider.findById(socket.userId)
+        .select("firstName lastName businessNameRegistered profileImage");
+      senderInfo = provider;
     }
 
+    // Prepare realtime message data
+    const realtimeMessageData = {
+      conversationId: conversation._id,
+      message: {
+        ...message,
+        senderInfo: senderInfo
+      },
+      sender: {
+        id: socket.userId,
+        role: socket.userRole,
+        info: senderInfo
+      },
+      quickChatInfo: {
+        id: quickChat._id,
+        content: quickChat.content,
+        isAdminCreated: quickChat.createdByRole === "admin",
+        usageCount: quickChat.usageCount,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    // Emit realtime message to conversation room
+    emitRealtimeQuickMessage(conversation._id, realtimeMessageData);
+
+    // Notify other participant if they're not in the room
+    const otherUserId = socket.userRole === "customer" 
+      ? conversation.providerId 
+      : conversation.customerId;
+
     if (otherUserId) {
+      // Send conversation update notification
       io.to(`user_${otherUserId}`).emit("message", {
         type: "conversation_updated",
         data: {
           conversationId: conversation._id,
-          senderRole: socket.userRole,
           lastMessage: quickChat.content,
           lastMessageAt: new Date(),
+          senderRole: socket.userRole,
+          senderId: socket.userId,
           hasNewMessage: true,
-          quickChatUsed: true,
+          isQuickChat: true,
         },
       });
-      io.to(`user_${otherUserId}`).emit("message", messageData);
     }
 
-    console.log("🎉 Sending message_sent confirmation");
+    // Send confirmation to sender
     socket.emit("message", {
-      type: "message_sent",
+      type: "quick_chat_sent",
       data: {
         success: true,
         conversationId: conversation._id,
-        message: "Message sent successfully",
-        savedMessage: message,
-        quickChatInfo: {
-          id: quickChat._id,
-          isAdminCreated: quickChat.createdByRole === "admin",
-          usageCount: quickChat.usageCount,
-        },
+        messageId: message._id,
+        message: "Quick chat sent successfully",
+        timestamp: new Date().toISOString(),
       },
     });
 
-    console.log("🎉 Complete message flow finished successfully!");
+    console.log(`✅ Quick chat sent in conversation ${conversation._id}`);
   } catch (error) {
     console.error("❌ Send quick chat error:", error);
-    console.error("❌ Error details:", {
-      message: error.message,
-      stack: error.stack,
-      userId: socket.userId,
-      requestId: data.requestId,
-      bundleId: data.bundleId,
-      quickChatId: data.quickChatId,
-    });
     socket.emit("message", {
       type: "error",
-      data: { message: "Failed to send message: " + error.message },
+      data: { message: "Failed to send quick chat: " + error.message },
     });
   }
 }
 
 async function handleAuthenticate(socket, data) {
   try {
-    const decoded = jwt.verify(data.token, process.env.JWT_SECRET);
+    const token = typeof data === 'object' ? data.token : data;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     socket.userId = decoded.userId.toString();
 
-    // Get user from database to ensure correct role
+    // Get user from database
     let user = await Customer.findById(socket.userId);
     if (user) {
       socket.userRole = user.role;
@@ -677,7 +778,7 @@ async function handleAuthenticate(socket, data) {
       if (user) {
         socket.userRole = user.role;
       } else {
-        throw new Error("User not found in database");
+        throw new Error("User not found");
       }
     }
 
@@ -685,9 +786,7 @@ async function handleAuthenticate(socket, data) {
     userSocketMap.set(socket.userId, socket.id);
     socket.join(`user_${socket.userId}`);
 
-    console.log(
-      `✅ Socket ${socket.id} authenticated as user ${socket.userId} (${socket.userRole})`
-    );
+    console.log(`✅ Socket ${socket.id} authenticated as user ${socket.userId} (${socket.userRole})`);
 
     socket.emit("message", {
       type: "authenticated",
@@ -711,44 +810,33 @@ async function handleGetConversation(socket, data) {
   try {
     const { requestId, bundleId, customerId } = data;
 
-    // For bundle conversations, providers must specify which participant/creator conversation to fetch
-    if (bundleId && socket.userRole === "provider" && !customerId) {
-      socket.emit("message", {
-        type: "error",
-        data: {
-          message:
-            "customerId is required with bundleId to get a specific bundle conversation",
-        },
-      });
-      return;
-    }
-
     const conversation = await getOrCreateConversationV2(socket, {
       requestId,
       bundleId,
       customerIdForBundle: customerId,
-    }).then((conv) =>
-      Conversation.findById(conv._id)
+    });
+
+    if (conversation) {
+      const populatedConversation = await Conversation.findById(conversation._id)
         .populate("customerId", "firstName lastName profileImage")
         .populate(
           "providerId",
           "firstName lastName businessNameRegistered profileImage"
-        )
-        .sort({ "messages.timestamp": 1 })
-    );
+        );
 
-    if (conversation) {
       socket.emit("message", {
         type: "conversation_history",
         data: {
           conversation: {
-            _id: conversation._id,
-            customer: conversation.customerId,
-            provider: conversation.providerId,
-            requestId: conversation.requestId,
-            bundleId: conversation.bundleId,
+            _id: populatedConversation._id,
+            customer: populatedConversation.customerId,
+            provider: populatedConversation.providerId,
+            requestId: populatedConversation.requestId,
+            bundleId: populatedConversation.bundleId,
+            lastMessage: populatedConversation.lastMessage,
+            lastMessageAt: populatedConversation.lastMessageAt,
           },
-          messages: conversation.messages,
+          messages: populatedConversation.messages,
         },
       });
     } else {
@@ -764,12 +852,11 @@ async function handleGetConversation(socket, data) {
     console.error("❌ Get conversation error:", error);
     socket.emit("message", {
       type: "error",
-      data: { message: "Failed to get conversation" },
+      data: { message: "Failed to get conversation: " + error.message },
     });
   }
 }
 
-// List all conversations for the authenticated user
 async function handleListConversations(socket) {
   try {
     if (!socket.userId || !socket.userRole) {
@@ -780,19 +867,46 @@ async function handleListConversations(socket) {
       return;
     }
 
-    const conversations = await Conversation.find({
-      $or: [{ customerId: socket.userId }, { providerId: socket.userId }],
-    })
-      .sort({ lastMessageAt: -1, updatedAt: -1 })
-      .populate("customerId", "firstName lastName profileImage")
-      .populate(
-        "providerId",
-        "firstName lastName businessNameRegistered profileImage"
-      );
+    let conversations;
+    
+    if (socket.userRole === "customer") {
+      conversations = await Conversation.find({
+        customerId: socket.userId,
+        isActive: true,
+      })
+        .sort({ lastMessageAt: -1, updatedAt: -1 })
+        .populate("customerId", "firstName lastName profileImage")
+        .populate(
+          "providerId",
+          "firstName lastName businessNameRegistered profileImage"
+        )
+        .populate({
+          path: "requestId",
+          select: "serviceType status scheduledDate scheduledTime avgPrice",
+        })
+        .populate({
+          path: "bundleId",
+          select: "title status scheduledDate scheduledTime totalPrice",
+        });
+    } else {
+      conversations = await Conversation.find({
+        providerId: socket.userId,
+      })
+        .sort({ lastMessageAt: -1, updatedAt: -1 })
+        .populate("customerId", "firstName lastName profileImage")
+        .populate(
+          "providerId",
+          "firstName lastName businessNameRegistered profileImage"
+        );
+    }
 
     socket.emit("message", {
-      type: "conversations",
-      data: { conversations },
+      type: "conversations_list",
+      data: {
+        conversations: conversations,
+        totalCount: conversations.length,
+        userRole: socket.userRole,
+      },
     });
   } catch (err) {
     console.error("[chat] list conversations error:", err);
@@ -803,7 +917,44 @@ async function handleListConversations(socket) {
   }
 }
 
-// Generic text message sender for requestId/bundleId conversations
+// Function to get available quick chats
+async function handleGetAvailableQuickChats(socket) {
+  try {
+    if (!socket.userId || !socket.userRole) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Authentication required" }
+      });
+      return;
+    }
+
+    const quickChats = await QuickChat.find({
+      isActive: true,
+      $or: [
+        { createdBy: socket.userId },
+        { createdByRole: "admin" },
+        { createdByRole: socket.userRole },
+      ]
+    }).sort({ usageCount: -1, createdAt: -1 });
+
+    socket.emit("message", {
+      type: "available_quick_chats",
+      data: {
+        quickChats: quickChats,
+        count: quickChats.length,
+        userRole: socket.userRole,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error("❌ Get quick chats error:", error);
+    socket.emit("message", {
+      type: "error",
+      data: { message: "Failed to get quick chats: " + error.message }
+    });
+  }
+}
+
 async function handleSendMessage(socket, data) {
   try {
     console.log("[chat] send_message request:", data);
@@ -821,7 +972,7 @@ async function handleSendMessage(socket, data) {
     if (!content || (!requestId && !bundleId)) {
       socket.emit("message", {
         type: "error",
-        data: { message: "content and requestId or bundleId are required" },
+        data: { message: "Content and requestId or bundleId are required" },
       });
       return;
     }
@@ -843,6 +994,7 @@ async function handleSendMessage(socket, data) {
     socket.join(`conversation_${conversation._id}`);
 
     const message = {
+      _id: new mongoose.Types.ObjectId(),
       senderId: socket.userId,
       senderRole: socket.userRole,
       content,
@@ -866,27 +1018,25 @@ async function handleSendMessage(socket, data) {
       },
     };
 
-    // Emit to the conversation room (participants who joined)
+    // Emit to conversation room
     io.to(`conversation_${conversation._id}`).emit("message", messageData);
 
-    // Notify the other user even if they aren't in the room
-    const otherUserId =
-      socket.userRole === "customer"
-        ? conversation.providerId
-        : conversation.customerId;
+    // Notify other user
+    const otherUserId = socket.userRole === "customer"
+      ? conversation.providerId
+      : conversation.customerId;
+
     if (otherUserId) {
       io.to(`user_${otherUserId}`).emit("message", {
         type: "conversation_updated",
         data: {
           conversationId: conversation._id,
-          senderRole: socket.userRole,
           lastMessage: content,
-          lastMessageAt: conversation.lastMessageAt,
+          lastMessageAt: new Date(),
+          senderRole: socket.userRole,
           hasNewMessage: true,
         },
       });
-
-      io.to(`user_${otherUserId}`).emit("message", messageData);
     }
 
     socket.emit("message", {
@@ -895,7 +1045,6 @@ async function handleSendMessage(socket, data) {
         success: true,
         conversationId: conversation._id,
         message: "Message sent successfully",
-        savedMessage: message,
       },
     });
   } catch (error) {
@@ -907,7 +1056,6 @@ async function handleSendMessage(socket, data) {
   }
 }
 
-// Join all conversation rooms for the authenticated user for realtime updates
 async function handleJoinAllConversations(socket) {
   try {
     if (!socket.userId || !socket.userRole) {
@@ -918,13 +1066,24 @@ async function handleJoinAllConversations(socket) {
       return;
     }
 
-    const conversations = await Conversation.find({
-      $or: [{ customerId: socket.userId }, { providerId: socket.userId }],
-    }).select("_id requestId bundleId customerId providerId");
+    let conversations;
+    
+    if (socket.userRole === "customer") {
+      conversations = await Conversation.find({
+        customerId: socket.userId,
+        isActive: true,
+      }).select("_id requestId bundleId customerId providerId");
+    } else {
+      conversations = await Conversation.find({
+        providerId: socket.userId,
+      }).select("_id requestId bundleId customerId providerId");
+    }
 
     conversations.forEach((conv) => {
       socket.join(`conversation_${conv._id}`);
     });
+
+    socket.join(`user_${socket.userId}`);
 
     socket.emit("message", {
       type: "joined_all_conversations",
@@ -933,10 +1092,14 @@ async function handleJoinAllConversations(socket) {
           conversationId: c._id,
           requestId: c.requestId,
           bundleId: c.bundleId,
+          type: c.requestId ? "service_request" : "bundle",
         })),
+        count: conversations.length,
         message: "Joined all conversations for realtime updates",
       },
     });
+
+    console.log(`✅ ${socket.userRole} ${socket.userId} joined ${conversations.length} conversation rooms`);
   } catch (err) {
     console.error("[chat] join all conversations error:", err);
     socket.emit("message", {
@@ -964,9 +1127,7 @@ const initSocket = (server) => {
     const userId = socket.userId;
 
     if (userId && socket.userRole) {
-      console.log(
-        `✅ Client connected: ${socket.id} for user ${userId} (${socket.userRole})`
-      );
+      console.log(`✅ Client connected: ${socket.id} for user ${userId} (${socket.userRole})`);
       userSocketMap.set(userId, socket.id);
       socket.join(`user_${userId}`);
 
@@ -992,7 +1153,7 @@ const initSocket = (server) => {
       });
     }
 
-    // Handle Postman's default "message" events
+    // Handle message events
     socket.on("message", (data) => {
       console.log("📨 Message received:", data);
 
@@ -1037,6 +1198,15 @@ const initSocket = (server) => {
         case "list_conversations":
           handleListConversations(socket);
           break;
+        case "get_customer_conversations":
+          handleGetCustomerConversations(socket);
+          break;
+        case "get_available_quick_chats":
+          handleGetAvailableQuickChats(socket);
+          break;
+        case "get_bundle_participants":
+          handleGetBundleParticipants(socket, eventData);
+          break;
         case "join_all_conversations":
           handleJoinAllConversations(socket);
           break;
@@ -1045,7 +1215,6 @@ const initSocket = (server) => {
             type: "pong",
             data: {
               message: "Pong from server!",
-              yourData: eventData,
               timestamp: new Date().toISOString(),
             },
           });
@@ -1060,23 +1229,31 @@ const initSocket = (server) => {
 
     // Direct event handlers
     socket.on("authenticate", (data) => {
-      const token = typeof data === "string" ? data : data.token;
-      handleAuthenticate(socket, { token });
+      handleAuthenticate(socket, data);
     });
 
     socket.on("join_conversation", (data) => {
-      console.log("👥 Direct join_conversation:", data);
       handleJoinConversation(socket, data);
     });
 
     socket.on("send_quick_chat", (data) => {
-      console.log("💬 Direct send_quick_chat:", data);
       handleSendQuickChat(socket, data);
     });
 
     socket.on("get_conversation", (data) => {
-      console.log("📋 Direct get_conversation:", data);
       handleGetConversation(socket, data);
+    });
+
+    socket.on("get_customer_conversations", () => {
+      handleGetCustomerConversations(socket);
+    });
+
+    socket.on("get_available_quick_chats", () => {
+      handleGetAvailableQuickChats(socket);
+    });
+
+    socket.on("get_bundle_participants", (data) => {
+      handleGetBundleParticipants(socket, data);
     });
 
     socket.on("list_conversations", () => {
@@ -1093,10 +1270,8 @@ const initSocket = (server) => {
 
     // Test events
     socket.on("ping", (data) => {
-      console.log("🏓 Ping received:", data);
       socket.emit("pong", {
         message: "Pong! Server is working!",
-        yourData: data,
         timestamp: new Date().toISOString(),
       });
     });
