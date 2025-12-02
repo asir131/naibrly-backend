@@ -18,6 +18,10 @@ const authenticateSocket = async (socket, next) => {
   const token =
     socket.handshake.auth.token ||
     socket.handshake.headers.token ||
+    (socket.handshake.headers.authorization &&
+    socket.handshake.headers.authorization.toLowerCase().startsWith("bearer ")
+      ? socket.handshake.headers.authorization.split(" ")[1]
+      : null) ||
     socket.handshake.query.token;
 
   if (token) {
@@ -604,16 +608,17 @@ async function handleSendQuickChat(socket, data) {
         socket.userRole === "customer"
           ? conversation.providerId
           : conversation.customerId;
-      if (otherUserId && userSocketMap.has(otherUserId.toString())) {
-        io.to(`user_${otherUserId}`).emit("message", {
-          type: "conversation_updated",
-          data: {
-            conversationId: conversation._id,
-            lastMessage: quickChat.content,
-            lastMessageAt: new Date(),
-            hasNewMessage: true,
-            quickChatUsed: true,
-          },
+    if (otherUserId && userSocketMap.has(otherUserId.toString())) {
+      io.to(`user_${otherUserId}`).emit("message", {
+        type: "conversation_updated",
+        data: {
+          conversationId: conversation._id,
+          senderRole: socket.userRole,
+          lastMessage: quickChat.content,
+          lastMessageAt: new Date(),
+          hasNewMessage: true,
+          quickChatUsed: true,
+        },
         });
       }
     } else if (conversation.bundleId) {
@@ -761,6 +766,179 @@ async function handleGetConversation(socket, data) {
   }
 }
 
+// List all conversations for the authenticated user
+async function handleListConversations(socket) {
+  try {
+    if (!socket.userId || !socket.userRole) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Authentication required to list conversations" },
+      });
+      return;
+    }
+
+    const conversations = await Conversation.find({
+      $or: [{ customerId: socket.userId }, { providerId: socket.userId }],
+    })
+      .sort({ lastMessageAt: -1, updatedAt: -1 })
+      .populate("customerId", "firstName lastName profileImage")
+      .populate(
+        "providerId",
+        "firstName lastName businessNameRegistered profileImage"
+      );
+
+    socket.emit("message", {
+      type: "conversations",
+      data: { conversations },
+    });
+  } catch (err) {
+    console.error("[chat] list conversations error:", err);
+    socket.emit("message", {
+      type: "error",
+      data: { message: "Failed to load conversations" },
+    });
+  }
+}
+
+// Generic text message sender for requestId/bundleId conversations
+async function handleSendMessage(socket, data) {
+  try {
+    console.log("[chat] send_message request:", data);
+
+    if (!socket.userId || !socket.userRole) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Authentication required to send messages" },
+      });
+      return;
+    }
+
+    const { requestId, bundleId, customerId, content } = data || {};
+
+    if (!content || (!requestId && !bundleId)) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "content and requestId or bundleId are required" },
+      });
+      return;
+    }
+
+    const conversation = await getOrCreateConversationV2(socket, {
+      requestId,
+      bundleId,
+      customerIdForBundle: customerId,
+    });
+
+    if (!conversation) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Conversation not found" },
+      });
+      return;
+    }
+
+    socket.join(`conversation_${conversation._id}`);
+
+    const message = {
+      senderId: socket.userId,
+      senderRole: socket.userRole,
+      content,
+      timestamp: new Date(),
+    };
+
+    conversation.messages.push(message);
+    conversation.lastMessage = content;
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+
+    const messageData = {
+      type: "new_message",
+      data: {
+        conversationId: conversation._id,
+        message,
+        sender: {
+          id: socket.userId,
+          role: socket.userRole,
+        },
+      },
+    };
+
+    io.to(`conversation_${conversation._id}`).emit("message", messageData);
+
+    const otherUserId =
+      socket.userRole === "customer"
+        ? conversation.providerId
+        : conversation.customerId;
+    if (otherUserId && userSocketMap.has(otherUserId.toString())) {
+      io.to(`user_${otherUserId}`).emit("message", {
+        type: "conversation_updated",
+        data: {
+          conversationId: conversation._id,
+          senderRole: socket.userRole,
+          lastMessage: content,
+          lastMessageAt: conversation.lastMessageAt,
+          hasNewMessage: true,
+        },
+      });
+    }
+
+    socket.emit("message", {
+      type: "message_sent",
+      data: {
+        success: true,
+        conversationId: conversation._id,
+        message: "Message sent successfully",
+        savedMessage: message,
+      },
+    });
+  } catch (error) {
+    console.error("[chat] Send message error:", error);
+    socket.emit("message", {
+      type: "error",
+      data: { message: "Failed to send message: " + error.message },
+    });
+  }
+}
+
+// Join all conversation rooms for the authenticated user for realtime updates
+async function handleJoinAllConversations(socket) {
+  try {
+    if (!socket.userId || !socket.userRole) {
+      socket.emit("message", {
+        type: "error",
+        data: { message: "Authentication required to join conversations" },
+      });
+      return;
+    }
+
+    const conversations = await Conversation.find({
+      $or: [{ customerId: socket.userId }, { providerId: socket.userId }],
+    }).select("_id requestId bundleId customerId providerId");
+
+    conversations.forEach((conv) => {
+      socket.join(`conversation_${conv._id}`);
+    });
+
+    socket.emit("message", {
+      type: "joined_all_conversations",
+      data: {
+        joined: conversations.map((c) => ({
+          conversationId: c._id,
+          requestId: c.requestId,
+          bundleId: c.bundleId,
+        })),
+        message: "Joined all conversations for realtime updates",
+      },
+    });
+  } catch (err) {
+    console.error("[chat] join all conversations error:", err);
+    socket.emit("message", {
+      type: "error",
+      data: { message: "Failed to join conversations" },
+    });
+  }
+}
+
 const initSocket = (server) => {
   io = new SocketIOServer(server, {
     cors: {
@@ -840,11 +1018,20 @@ const initSocket = (server) => {
         case "send_quick_chat":
           handleSendQuickChat(socket, eventData);
           break;
+        case "send_message":
+          handleSendMessage(socket, eventData);
+          break;
         case "authenticate":
           handleAuthenticate(socket, eventData);
           break;
         case "get_conversation":
           handleGetConversation(socket, eventData);
+          break;
+        case "list_conversations":
+          handleListConversations(socket);
+          break;
+        case "join_all_conversations":
+          handleJoinAllConversations(socket);
           break;
         case "ping":
           socket.emit("message", {
@@ -883,6 +1070,18 @@ const initSocket = (server) => {
     socket.on("get_conversation", (data) => {
       console.log("📋 Direct get_conversation:", data);
       handleGetConversation(socket, data);
+    });
+
+    socket.on("list_conversations", () => {
+      handleListConversations(socket);
+    });
+
+    socket.on("send_message", (data) => {
+      handleSendMessage(socket, data);
+    });
+
+    socket.on("join_all_conversations", () => {
+      handleJoinAllConversations(socket);
     });
 
     // Test events
