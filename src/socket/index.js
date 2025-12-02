@@ -720,6 +720,18 @@ async function handleGetConversation(socket, data) {
   try {
     const { requestId, bundleId, customerId } = data;
 
+    // For bundle conversations, providers must specify which participant/creator conversation to fetch
+    if (bundleId && socket.userRole === "provider" && !customerId) {
+      socket.emit("message", {
+        type: "error",
+        data: {
+          message:
+            "customerId is required with bundleId to get a specific bundle conversation",
+        },
+      });
+      return;
+    }
+
     const conversation = await getOrCreateConversationV2(socket, {
       requestId,
       bundleId,
