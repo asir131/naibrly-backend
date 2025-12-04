@@ -12,6 +12,33 @@ const Bundle = require("../models/Bundle");
 const userSocketMap = new Map();
 let io;
 
+// Lightweight profile fetcher for sockets
+const buildProfile = (doc, role) => {
+  if (!doc) return null;
+  return {
+    id: doc._id,
+    role,
+    firstName: doc.firstName,
+    lastName: doc.lastName,
+    profileImage: doc.profileImage,
+    businessName: doc.businessNameRegistered,
+  };
+};
+
+const fetchUserProfile = async (userId, role) => {
+  if (!userId || !role) return null;
+  if (role === "customer") {
+    const customer = await Customer.findById(userId).select(
+      "firstName lastName profileImage"
+    );
+    return buildProfile(customer, role);
+  }
+  const provider = await ServiceProvider.findById(userId).select(
+    "firstName lastName businessNameRegistered profileImage"
+  );
+  return buildProfile(provider, role);
+};
+
 // Improved authentication middleware
 const authenticateSocket = async (socket, next) => {
   console.log("🔐 Authentication attempt for socket:", socket.id);

@@ -32,10 +32,23 @@ const ensureConversationIndexes = async () => {
     }
   }
 
+  // Drop old composite if present so we can recreate with partial filter
+  try {
+    await Conversation.collection.dropIndex("bundleId_1_customerId_1");
+    console.log("Dropped legacy bundleId_1_customerId_1 index on conversations");
+  } catch (err) {
+    if (err.codeName !== "IndexNotFound" && err.code !== 27) {
+      console.error("Error dropping legacy bundleId_1_customerId_1 index:", err.message);
+    }
+  }
+
   try {
     await Conversation.collection.createIndex(
       { bundleId: 1, customerId: 1 },
-      { unique: true, sparse: true }
+      {
+        unique: true,
+        partialFilterExpression: { bundleId: { $exists: true, $ne: null } },
+      }
     );
     console.log("Ensured composite index on { bundleId, customerId } for conversations");
   } catch (err) {

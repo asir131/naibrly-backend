@@ -63,10 +63,14 @@ const conversationSchema = new mongoose.Schema(
 
 // Ensure one conversation per service request
 conversationSchema.index({ requestId: 1 }, { unique: true, sparse: true });
-// Allow per-participant bundle conversations (one per bundleId + customerId)
+// Allow per-participant bundle conversations (one per bundleId + customerId).
+// Use partial index so request-only conversations (bundleId missing/null) don't collide.
 conversationSchema.index(
   { bundleId: 1, customerId: 1 },
-  { unique: true, sparse: true }
+  {
+    unique: true,
+    partialFilterExpression: { bundleId: { $exists: true, $ne: null } },
+  }
 );
 
 module.exports = mongoose.model("Conversation", conversationSchema);
